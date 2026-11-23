@@ -1209,6 +1209,14 @@ void on_packet(const SimpleBLE::ByteArray& bytes, const std::string& devTag) {
         }
     }
 
+    // Fast-turn acceleration must only apply to encoders, not buttons.
+    // A button sends its release byte (press byte + 1) before it can be pressed again; an encoder turn doesn't.
+    // So any byte B ends the acceleration history of B-1: pressing a toggle twice quickly never accelerates,
+    // while continuous encoder turns still do.
+    if (rawByte > 0) {
+        last_input_times.erase(role + "_" + std::to_string(rawByte - 1));
+    }
+
     std::stringstream key_stream;
     key_stream << role << "_" << std::hex << std::uppercase << std::setw(2) << std::setfill('0') << (int)rawByte;
     std::string shortKey = key_stream.str();
