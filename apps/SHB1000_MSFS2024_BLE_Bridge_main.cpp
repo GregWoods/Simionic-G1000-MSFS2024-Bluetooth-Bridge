@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <optional>
 #include <vector>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <chrono>
@@ -136,7 +137,15 @@ static std::string g_current_aircraft_title;
 
 // Structure for the commands: Key (e.g. "PFD_C0") -> Command
 using CommandMap = std::unordered_map<std::string, std::string>;
-CommandMap g_commandMaps;
+// The active command map. load_command_map() (SimConnect/console threads) builds a new map and swaps it in,
+// while on_packet() (BLE threads) reads it - so it's published as an immutable snapshot under a mutex.
+static std::mutex g_commandMapMutex;
+static std::shared_ptr<const CommandMap> g_commandMaps = std::make_shared<const CommandMap>();
+
+static std::shared_ptr<const CommandMap> get_command_map() {
+    std::lock_guard<std::mutex> lock(g_commandMapMutex);
+    return g_commandMaps;
+}
 
 // Globals to track dynamic long presses
 static std::atomic<bool> generic_long_press_active{false};
@@ -1052,7 +1061,8 @@ bool load_command_map(const std::string& filename) {
         return false;
     }
 
-    g_commandMaps.clear();
+    // Parse into a new map; the current one stays in use until the new one is complete
+    auto newMap = std::make_shared<CommandMap>();
 
     while (std::getline(file, line)) {
         // Ignore comments and empty lines
@@ -1088,11 +1098,16 @@ bool load_command_map(const std::string& filename) {
             // 3. Save into the map
             // We use the full string as key, e.g. "PFD_C0" or "PFD_C0_L"
             if (!keyStr.empty() && !command.empty()) {
-                g_commandMaps[keyStr] = command;
+                (*newMap)[keyStr] = command;
             }
         }
     }
-    std::cout << "[OK] Command mapping successfully loaded. Entries: " << g_commandMaps.size() << std::endl;
+    const size_t entries = newMap->size();
+    {
+        std::lock_guard<std::mutex> lock(g_commandMapMutex);
+        g_commandMaps = std::move(newMap);
+    }
+    std::cout << "[OK] Command mapping successfully loaded. Entries: " << entries << std::endl;
     return true;
 }
 
@@ -1220,16 +1235,17 @@ void on_packet(const SimpleBLE::ByteArray& bytes, const std::string& devTag) {
 
     std::string command = "";
     bool has_short_command = false;
-    auto itShort = g_commandMaps.find(shortKey);
-    if (itShort != g_commandMaps.end()) {
+    const auto commandMap = get_command_map(); // Snapshot: stays valid even if the map is reloaded meanwhile
+    auto itShort = commandMap->find(shortKey);
+    if (itShort != commandMap->end()) {
         command = itShort->second;
         has_short_command = true;
     }
 
     std::string longCommand = "";
     bool has_long_command = false;
-    auto itLong = g_commandMaps.find(longKey);
-    if (itLong != g_commandMaps.end()) {
+    auto itLong = commandMap->find(longKey);
+    if (itLong != commandMap->end()) {
         longCommand = itLong->second;
         has_long_command = true;
     }
