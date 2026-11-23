@@ -287,8 +287,9 @@ static void play_gggd_sequence(); // Forward declaration
 #include <SimConnect.h>
 HANDLE g_hSimConnectNative = NULL;
 enum DATA_DEFINE_ID { DEFINITION_AIRCRAFT_TITLE = 1, DEFINITION_ORBIT_DATA = 2 };
-enum DATA_REQUEST_ID { REQUEST_AIRCRAFT_TITLE = 1, REQUEST_ORBIT_DATA = 2 };
-enum EVENT_ID { EVENT_SIM_RATE_INCR = 1, EVENT_SIM_RATE_DECR = 2 };
+// REQUEST_AIRCRAFT_TITLE_AUTO: re-query after an "aircraft loaded"/"flight started" event; ignored if the title didn't change
+enum DATA_REQUEST_ID { REQUEST_AIRCRAFT_TITLE = 1, REQUEST_ORBIT_DATA = 2, REQUEST_AIRCRAFT_TITLE_AUTO = 3 };
+enum EVENT_ID { EVENT_SIM_RATE_INCR = 1, EVENT_SIM_RATE_DECR = 2, EVENT_AIRCRAFT_LOADED = 3, EVENT_SIM_START = 4 };
 
 struct AircraftData {
     char title[256];
@@ -661,9 +662,13 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
     switch (pData->dwID) {
         case SIMCONNECT_RECV_ID_SIMOBJECT_DATA: {
             SIMCONNECT_RECV_SIMOBJECT_DATA* pObjData = (SIMCONNECT_RECV_SIMOBJECT_DATA*)pData;
-            if (pObjData->dwRequestID == REQUEST_AIRCRAFT_TITLE) {
+            if (pObjData->dwRequestID == REQUEST_AIRCRAFT_TITLE || pObjData->dwRequestID == REQUEST_AIRCRAFT_TITLE_AUTO) {
                 AircraftData* pAircraftData = (AircraftData*)&pObjData->dwData;
                 std::string title = pAircraftData->title;
+                // Automatic re-query after a sim event: nothing to do if it's still the same aircraft
+                if (pObjData->dwRequestID == REQUEST_AIRCRAFT_TITLE_AUTO && title == get_current_aircraft_title()) {
+                    break;
+                }
                 set_current_aircraft_title(title);
                 std::string map_id = g_settings.default_map_id;
 
@@ -837,6 +842,18 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
                             }
                         }
                     }
+                }
+            }
+            break;
+        }
+        case SIMCONNECT_RECV_ID_EVENT_FILENAME:   // "AircraftLoaded" (comes with the .air file name)
+        case SIMCONNECT_RECV_ID_EVENT: {          // "SimStart" (a flight was loaded and is starting)
+            SIMCONNECT_RECV_EVENT* pEvent = (SIMCONNECT_RECV_EVENT*)pData;
+            if (pEvent->uEventID == EVENT_AIRCRAFT_LOADED || pEvent->uEventID == EVENT_SIM_START) {
+                // The user aircraft may have changed (e.g. career mode: the menu aircraft is replaced by the flight's
+                // aircraft). Ask again - but only after setup; the initial check after setup covers the time before.
+                if (g_discoveryFinished && g_hSimConnectNative) {
+                    SimConnect_RequestDataOnSimObject(g_hSimConnectNative, REQUEST_AIRCRAFT_TITLE_AUTO, DEFINITION_AIRCRAFT_TITLE, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE);
                 }
             }
             break;
@@ -2353,11 +2370,14 @@ int ble_run_session_scan_until_all_addresses(
             }
             g_interactive_prompt_active = false;
 
-            // Clear prompt state
+            // Clear prompt state - unless a different aircraft was detected while the prompt was open,
+            // then keep that one so it is asked for next
             {
                 std::lock_guard<std::mutex> lock(g_pending_aircraft_mutex);
-                g_pending_new_aircraft.clear();
-                g_suggested_map_id.clear();
+                if (g_pending_new_aircraft == current_pending_aircraft) {
+                    g_pending_new_aircraft.clear();
+                    g_suggested_map_id.clear();
+                }
             }
 
             continue; // Re-evaluate loop
@@ -2801,6 +2821,10 @@ int main(int argc, char* argv[]) {
                     
                     SimConnect_MapClientEventToSimEvent(g_hSimConnectNative, EVENT_SIM_RATE_INCR, "SIM_RATE_INCR");
                     SimConnect_MapClientEventToSimEvent(g_hSimConnectNative, EVENT_SIM_RATE_DECR, "SIM_RATE_DECR");
+
+                    // Re-check the aircraft whenever MSFS loads a different one or starts a flight
+                    SimConnect_SubscribeToSystemEvent(g_hSimConnectNative, EVENT_AIRCRAFT_LOADED, "AircraftLoaded");
+                    SimConnect_SubscribeToSystemEvent(g_hSimConnectNative, EVENT_SIM_START, "SimStart");
                     
                     std::cout << "[INFO] Native SimConnect connection established for A-Vars and Events." << std::endl;
                     initial_aircraft_check_done = false;
