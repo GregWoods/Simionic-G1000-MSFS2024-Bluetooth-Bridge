@@ -2115,6 +2115,12 @@ int ble_run_session_scan_until_all_addresses(
         update_last_session_snapshot();
     }
 
+    // A fast reconnect only redoes the scan/connect/subscribe step. It is called from the console loop below
+    // (key R or auto-reconnect), so return to that loop instead of starting another, nested copy of it.
+    if (is_reconnect) {
+        return connectedCount;
+    }
+
     // Initial backlight setting
     if (!initialBrightnessSet && g_discoveryFinished && !g_ble.connected.empty()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
@@ -2401,7 +2407,8 @@ int ble_run_session_scan_until_all_addresses(
     return 0;
 }
 
-// Function to trigger a fast reconnect to lost Bluetooth devices based on the session snapshot
+// Function to trigger a fast reconnect to lost Bluetooth devices based on the session snapshot.
+// Called from the console loop; returns to it once the reconnect attempt is finished.
 void trigger_fast_reconnect() {
     if (lastSessionDevices.empty()) return;
     std::cout << "[RECONNECT] Disconnecting old devices asynchronously" << std::endl;
@@ -2432,11 +2439,11 @@ void trigger_fast_reconnect() {
     // A short pause (0.5s) for the Bluetooth stack
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     std::cout << "[RECONNECT] Starting targeted search for reconnect..." << std::endl;
-    int result = ble_run_session_scan_until_all_addresses(
+    ble_run_session_scan_until_all_addresses(
         macsToFind, 
         g_settings.characteristicUUID, // UUID from global config
         on_packet,                      // Callback handler
-        true                            // Is Fast Reconnect
+        true                            // Is Fast Reconnect: only reconnects, then returns
     );
 
 }
