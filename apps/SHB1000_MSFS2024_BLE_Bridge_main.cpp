@@ -13,6 +13,8 @@
 #include <optional>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
+#include <deque>
 #include <thread>
 #include <chrono>
 #include <atomic>
@@ -575,13 +577,16 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
             } else if (pObjData->dwRequestID == REQUEST_ORBIT_DATA) {
                 OrbitData* pOrbitData = (OrbitData*)&pObjData->dwData;
                 {
+                    // Only hold the mutex while copying, so the SimRate telemetry thread is never blocked by the logic below
                     std::lock_guard<std::mutex> lock(g_orbitDataMutex);
                     g_latestOrbitData = *pOrbitData;
                     g_orbitDataReady = true;
-
+                }
+                {
                     // Output debug logs as requested
                     auto t = std::time(nullptr);
-                    auto tm = *std::localtime(&t);
+                    std::tm tm{};
+                    localtime_s(&tm, &t);
                     std::ostringstream oss;
                     oss << std::put_time(&tm, "%H:%M:%S");
                     std::string timestamp = oss.str();
@@ -600,7 +605,7 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
                         // Rule B: In-Air Approach Trigger (Primary Alarm)
                         if (pOrbitData->flaps_left_percent > 95.0 && pOrbitData->sim_on_ground == 0) {
                             if (!g_air_alarm_triggered) {
-                                std::thread(play_gggd_sequence).detach();
+                                play_gggd_sequence();
                                 g_air_alarm_triggered = true;
                             }
                         }
@@ -608,7 +613,7 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
                         // Rule C: On-Ground Failsafe Trigger (Secondary Alarm)
                         if (pOrbitData->sim_on_ground == 1 && std::abs(pOrbitData->velocity_body_z) < 0.1 && pOrbitData->flaps_left_percent < 5.0) {
                             if (!g_ground_alarm_triggered && g_air_alarm_triggered) {
-                                std::thread(play_gggd_sequence).detach();
+                                play_gggd_sequence();
                                 g_ground_alarm_triggered = true;
                             }
                         }
@@ -712,21 +717,59 @@ std::atomic<uint8_t> pending_first_key(0x00);
 std::chrono::steady_clock::time_point first_key_time;
 std::atomic<bool> combo_active_block(false);
 
-// Beep routine extracted to allow passing the toggle state
+// Beep() is synchronous and can take seconds, so all sounds are played one after another on a single
+// audio worker thread. Callers (SimConnect callback, BLE callbacks, console) only queue them and never block.
+static void enqueue_sound(std::function<void()> sound) {
+    static std::mutex queue_mutex;
+    static std::condition_variable queue_cv;
+    static std::deque<std::function<void()>> queue;
+    static std::once_flag worker_started;
+
+    std::call_once(worker_started, []() {
+        std::thread([]() {
+            while (true) {
+                std::function<void()> next;
+                {
+                    std::unique_lock<std::mutex> lock(queue_mutex);
+                    queue_cv.wait(lock, []() { return !queue.empty(); });
+                    next = std::move(queue.front());
+                    queue.pop_front();
+                }
+                next(); // Play without holding the lock
+            }
+        }).detach();
+    });
+
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        queue.push_back(std::move(sound));
+    }
+    queue_cv.notify_one();
+}
+
+// Beep routine extracted to allow passing the toggle state (queued, returns immediately)
 static void play_toggle_beep(bool is_swapped, int count, bool is_long) {
     int duration = is_long ? 900 : 150;
     int frequency = is_swapped ? 800 : 1600;
 
-    for (int i = 0; i < count; ++i) {
-        Beep(frequency, duration);
-        if (i < count - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    enqueue_sound([frequency, duration, count]() {
+        for (int i = 0; i < count; ++i) {
+            Beep(frequency, duration);
+            if (i < count - 1) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
         }
-    }
+    });
 }
 
-// GGGD Alarm Audio Sequence
+static void play_gggd_sequence_blocking();
+
+// GGGD Alarm Audio Sequence (queued, returns immediately)
 static void play_gggd_sequence() {
+    enqueue_sound(play_gggd_sequence_blocking);
+}
+
+static void play_gggd_sequence_blocking() {
     auto play_morse_G = [](int freq) {
         Beep(freq, 350); // Dash
         std::this_thread::sleep_for(std::chrono::milliseconds(60));
