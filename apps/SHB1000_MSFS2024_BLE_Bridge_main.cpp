@@ -1844,7 +1844,26 @@ int ble_run_session_scan_until_all_addresses(
 
                     if (!found) {
                         // If a completely new device is found, it also gets the current time
-                        g_knownDevices.push_back({role, "unknown", p.identifier(), "none", mac, getCurrentTimestamp(), true});
+                        std::string scannedName = p.identifier();
+
+                        // Use the known type the BLE name starts with (e.g. "SHB1000"), else the BLE name itself
+                        std::string devType = scannedName.empty() ? "UNKNOWN" : scannedName;
+                        for (const auto& vt : valid_types) {
+                            if (!scannedName.empty() && scannedName.rfind(vt, 0) == 0) {
+                                devType = vt;
+                                break;
+                            }
+                        }
+
+                        HardwareDevice newDev;
+                        newDev.instrument     = role;
+                        newDev.type           = devType;
+                        newDev.position       = "none";
+                        newDev.ble_name       = scannedName.empty() ? "Unknown" : scannedName;
+                        newDev.address        = mac;
+                        newDev.last_connected = getCurrentTimestamp();
+                        newDev.auto_reconnect = true;
+                        g_knownDevices.push_back(newDev);
                     }
 
                     std::cout << "[OK] " << p.identifier() << " [" << mac << "] was registered as " << role << "." << std::endl;
