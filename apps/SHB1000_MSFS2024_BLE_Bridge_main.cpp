@@ -67,6 +67,31 @@ constexpr const char* CONFIG_FILENAME = "SHB1000.config";             // HARD CO
 std::string KNOWN_DEVICES_FILENAME = "SHB1000_known_devices.config";  // Variable for the configuration of known devices, pre-assigned with DEFAULT
 std::string COMMANDS_FILENAME = "SHB1000_commands.map";               // Variable for the configuration of commands, pre-assigned with DEFAULT
 
+// Folder the config and map files are read from and written to (the executable's folder, set in main)
+static std::filesystem::path g_config_dir;
+
+// Resolves a config/map filename against the executable's folder (absolute paths are kept as they are),
+// so the app works no matter which working directory it was started from (shortcut, exe.xml, ...)
+static std::filesystem::path config_path(const std::string& filename) {
+    std::filesystem::path p = std::filesystem::u8path(filename);
+    if (p.is_absolute() || g_config_dir.empty()) return p;
+    return g_config_dir / p;
+}
+
+// Returns the folder that contains the running executable
+static std::filesystem::path get_executable_dir() {
+    std::wstring buffer(MAX_PATH, L'\0');
+    while (true) {
+        DWORD len = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (len == 0) return {};
+        if (len < buffer.size()) {
+            buffer.resize(len);
+            return std::filesystem::path(buffer).parent_path();
+        }
+        buffer.resize(buffer.size() * 2); // Path was truncated, try again with a bigger buffer
+    }
+}
+
 bool g_discoveryFinished = false; // Is only set to true when the setup dialog is finished
 bool initialBrightnessSet = false;  // If the brightness of the backlight has been initially set
 bool g_print_commands_to_console = false; // If true, ble commands and mappings are printed to std::cout
@@ -877,7 +902,7 @@ void save_master_config() {
     s_json["console_telemetry_logging"] = g_simRateConfig.console_telemetry_logging;
     g_master_config_json["SimRateControl"] = s_json;
 
-    std::ofstream file(CONFIG_FILENAME);
+    std::ofstream file(config_path(CONFIG_FILENAME));
     if (file.is_open()) {
         file << g_master_config_json.dump(2);
     }
@@ -886,9 +911,9 @@ void save_master_config() {
 // Loads the Master Config with general settings (e.g. file paths etc.)
 bool load_master_config(const std::string& filename) {
     try {
-        std::ifstream file(filename);
+        std::ifstream file(config_path(filename));
         if (!file.is_open()) {
-            std::cerr << "[ERROR] Master config not found: " << filename << std::endl;
+            std::cerr << "[ERROR] Master config not found: " << config_path(filename).u8string() << std::endl;
             return false;
         }
 
@@ -1009,7 +1034,7 @@ static void canonicalize_mac(const std::string& raw, std::string& out) {
 
 // Loads the known devices from the JSON file to facilitate connection and role assignment
 bool load_known_devices(const std::string& filename) {
-    std::ifstream file(filename);
+    std::ifstream file(config_path(filename));
     if (!file.is_open()) return false;
 
     try {
@@ -1044,7 +1069,7 @@ bool load_known_devices(const std::string& filename) {
 
 // Loads the command mapping from the config file to translate button/dial codes to sim commands
 bool load_command_map(const std::string& filename) {
-    std::ifstream file(filename);
+    std::ifstream file(config_path(filename));
     std::string line;
 
     if (!file.is_open()) {
@@ -1124,11 +1149,12 @@ void save_known_devices() {
         });
     }
 
-    std::ofstream file(g_settings.device_map_file);
+    // KNOWN_DEVICES_FILENAME is the file the devices were loaded from (device_map_file, or the default if not configured)
+    std::ofstream file(config_path(KNOWN_DEVICES_FILENAME));
     if (file.is_open()) {
         file << j.dump(2); // Save with 2 spaces indentation
         std::lock_guard<std::mutex> lock(g_consoleMutex);
-        std::cout << "[OK] Current device configuration file (" << g_settings.device_map_file << ") updated." << std::endl;
+        std::cout << "[OK] Current device configuration file (" << KNOWN_DEVICES_FILENAME << ") updated." << std::endl;
     }
 }
 
@@ -2338,6 +2364,10 @@ int main(int argc, char* argv[]) {
     SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 
     std::cout << "[INFO]: Program start! [Vers. " << APP_VERSION << "]" << std::endl; 
+
+    // Read and write all config/map files next to the executable, independent of the working directory
+    g_config_dir = get_executable_dir();
+    std::cout << "[INFO] Config folder: " << g_config_dir.u8string() << std::endl;
 
     // Ensure teardown runs on console close / Ctrl+C
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
