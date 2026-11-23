@@ -1647,6 +1647,7 @@ static bool find_characteristic(SimpleBLE::Peripheral& p,
 // Extra teardown helpers to ensure clean disconnects on WinRT
 static void clear_adapter_callbacks(SimpleBLE::Adapter& adapter) {
     adapter.set_callback_on_scan_found({});
+    adapter.set_callback_on_scan_updated({});
     adapter.set_callback_on_scan_start({});
     adapter.set_callback_on_scan_stop({});
 }
@@ -1790,13 +1791,16 @@ int ble_run_session_scan_until_all_addresses(
     }
 
     // 2. Scan callback: Only check MACs, don't query names
-    adapter.set_callback_on_scan_found([&, valid_types](SimpleBLE::Peripheral p) {
+    // SimpleBLE reports a device as "found" only once, on its first advertisement. On Windows that first packet often
+    // has no name yet (the name arrives later in a scan response), so the same check also runs on every "updated"
+    // report - otherwise a bezel whose name arrived late would never be matched.
+    auto on_scan_result = [&, valid_types](SimpleBLE::Peripheral p, bool first_seen) {
         std::string raw_addr = p.address();
         std::string clean_addr;
         canonicalize_mac(raw_addr, clean_addr); // Compress MAC to "aabbccddeeff" for matching
 
-        // Debug: Show EVERYTHING Windows finds
-        {
+        // Debug: Show EVERYTHING Windows finds (once per device)
+        if (first_seen) {
             std::lock_guard<std::mutex> lock(g_consoleMutex);
             std::cout << "[INFO] Found: " << (p.identifier().empty() ? "BLE Device" : p.identifier()) 
                       << " | MAC: " << raw_addr << std::endl;
@@ -1843,7 +1847,9 @@ int ble_run_session_scan_until_all_addresses(
                 }
             }
         }
-    });
+    };
+    adapter.set_callback_on_scan_found([on_scan_result](SimpleBLE::Peripheral p) { on_scan_result(p, true); });
+    adapter.set_callback_on_scan_updated([on_scan_result](SimpleBLE::Peripheral p) { on_scan_result(p, false); });
 
     // Default 10 seconds, in reconnect only 1 second
     int scan_duration_ms = is_reconnect ? 1000 : 10000;
@@ -1874,8 +1880,9 @@ int ble_run_session_scan_until_all_addresses(
         }
     }
 
-    // Scanning is over: drop the callback (it references locals of this function) and take the results
+    // Scanning is over: drop the callbacks (they reference locals of this function) and take the results
     adapter.set_callback_on_scan_found({});
+    adapter.set_callback_on_scan_updated({});
     {
         std::lock_guard<std::mutex> found_lock(found_mutex);
         // Barrier: a callback still running has finished; found_candidates is only used by this thread from here on
