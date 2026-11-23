@@ -1,0 +1,623 @@
+#==========================================================
+# BEFEHLS-SEKTIONEN (CODES)
+#==========================================================
+
+# ---------------
+[PFD_Commands]
+# ---------------
+# PFD Left Side
+# ---------------
+
+# PFD NAV VOL Push
+#unsure if toggle is more appropriate: AS1000_NAV_ID_PUSH_PFD_TOGGLE
+PFD_4E = "1 (>B:AS1000_NAV_ID_PUSH_PFD_Set)"
+PFD_4E_L = "1 (>B:ELECTRICAL_LINE_AVIONICS_BUS_1_TO_PWR_BUS_DISTRIB_TOGGLE)"
+PFD_4F = "0 (>B:AS1000_NAV_ID_PUSH_PFD_Set)"
+
+# PFD NAV VOL
+PFD_4D = "1 (>B:AS1000_NAV_VOLUME_PFD_Dec)"
+PFD_4C = "1 (>B:AS1000_NAV_VOLUME_PFD_Inc)"
+
+# PFD NAV Flip Flop
+PFD_4A = "(>B:AS1000_NAV_SWITCH_PFD_PUSH)"
+PFD_4B = unassigned
+
+# PFD NAV OUT
+PFD_53 = "1 (>B:AS1000_NAV_LARGE_PFD_Dec)"
+PFD_52 = "1 (>B:AS1000_NAV_LARGE_PFD_Inc)"
+
+# PFD NAV IN
+PFD_51 = "1 (>B:AS1000_NAV_SMALL_PFD_Dec)"
+PFD_50 = "1 (>B:AS1000_NAV_SMALL_PFD_Inc)"
+
+# PFD NAV Push
+PFD_54 = "(>B:AS1000_NAV_PUSH_PFD_PUSH)"
+PFD_55 = unassigned
+
+# GMC710 HDG Encdr
+# PFD_45 = "1 (>B:AUTOPILOT_HEADING_Dec)"
+# PFD_44 = "1 (>B:AUTOPILOT_Heading_Inc)"
+PFD_45 = "(>K:HEADING_BUG_DEC)"
+PFD_44 = "(>K:HEADING_BUG_INC)"
+
+# GMC710 HDG Enc Push
+PFD_56 = "(>B:AUTOPILOT_Heading_Sync_Push)"
+PFD_57 = unassigned
+
+# GMC710 AP Btn
+PFD_5C = "1 (>O:_ButtonAnimVar) (>B:AUTOPILOT_AP_1_Toggle)"
+PFD_5D = unassigned
+
+# GMC710 FD Btn
+PFD_40 = "1 (>O:_ButtonAnimVar) (>B:AUTOPILOT_FD_1_Mode_Toggle)"
+PFD_41 = unassigned
+
+# GMC710 HDG Btn
+PFD_64 = "1 (>O:_ButtonAnimVar) (>B:AUTOPILOT_Heading_Mode_Toggle)"
+PFD_65 = unassigned
+
+# GMC710 ALT Btn
+PFD_42 = "1 (>O:_ButtonAnimVar) (>B:AUTOPILOT_Altitude_Button_Toggle)"
+PFD_43 = unassigned
+
+# GMC710 NAV Btn
+PFD_62 = "1 (>O:_ButtonAnimVar) (>B:AUTOPILOT_NAV_Mode_Toggle)"
+PFD_63 = unassigned
+
+# GMC710 VNV Btn
+PFD_3C = "1 (>O:_ButtonAnimVar) (>B:AUTOPILOT_VNAV_Mode_Toggle)"
+PFD_3D = unassigned
+
+# GMC710 APR Btn
+PFD_60 = "1 (>O:_ButtonAnimVar) (>B:AUTOPILOT_Approach_Button_Toggle)"
+PFD_61 = unassigned
+
+# GMC710 BC Btn
+PFD_3A = "1 (>O:_ButtonAnimVar) (>B:AUTOPILOT_Backcourse_Button_Toggle)"
+PFD_3B = unassigned
+
+# GMC710 VS Btn
+PFD_5E = "1 (>B:AUTOPILOT_VS_Mode_Toggle)"
+PFD_5F = unassigned
+
+# GMC710 FLC Btn
+PFD_5A = "1 (>B:AUTOPILOT_FLC_Button_Toggle) 1 (>O:_ButtonAnimVar)"
+PFD_5B = unassigned
+
+# GMC710 IAS Speed UP Wheel Direction
+# 3PFD_8 = "1 (>B:AUTOPILOT_VerticalSpeed_Dec)"
+PFD_38 = "(A:AUTOPILOT FLIGHT LEVEL CHANGE, Bool) if{ (>K:AP_SPD_VAR_INC) } els{ (A:AUTOPILOT VERTICAL HOLD, Bool) if{ (>K:AP_VS_VAR_INC) } els{ (>K:AP_PITCH_REF_INC_UP) } }"
+PFD_38_L = "(A:AUTOPILOT FLIGHT LEVEL CHANGE, Bool) if{ (>K:AP_SPD_VAR_INC) (>K:AP_SPD_VAR_INC) (>K:AP_SPD_VAR_INC) (>K:AP_SPD_VAR_INC) (>K:AP_SPD_VAR_INC) } els{ (A:AUTOPILOT VERTICAL HOLD, Bool) if{ (>K:AP_VS_VAR_INC) (>K:AP_VS_VAR_INC) (>K:AP_VS_VAR_INC) (>K:AP_VS_VAR_INC) (>K:AP_VS_VAR_INC) } els{ (>K:AP_PITCH_REF_INC_UP) (>K:AP_PITCH_REF_INC_UP) (>K:AP_PITCH_REF_INC_UP) (>K:AP_PITCH_REF_INC_UP) (>K:AP_PITCH_REF_INC_UP) } }"
+PFD_39 = unassigned
+
+# GMC710 IAS Speed DN Wheel Direction
+# PFD_3E = "1 (>B:AUTOPILOT_VerticalSpeed_Inc)"
+PFD_3E = "(A:AUTOPILOT FLIGHT LEVEL CHANGE, Bool) if{ (>K:AP_SPD_VAR_DEC) } els{ (A:AUTOPILOT VERTICAL HOLD, Bool) if{ (>K:AP_VS_VAR_DEC) } els{ (>K:AP_PITCH_REF_INC_DN) } }"
+PFD_3E_L = "(A:AUTOPILOT FLIGHT LEVEL CHANGE, Bool) if{ (>K:AP_SPD_VAR_DEC) (>K:AP_SPD_VAR_DEC) (>K:AP_SPD_VAR_DEC) (>K:AP_SPD_VAR_DEC) (>K:AP_SPD_VAR_DEC) } els{ (A:AUTOPILOT VERTICAL HOLD, Bool) if{ (>K:AP_VS_VAR_DEC) (>K:AP_VS_VAR_DEC) (>K:AP_VS_VAR_DEC) (>K:AP_VS_VAR_DEC) (>K:AP_VS_VAR_DEC) } els{ (>K:AP_PITCH_REF_INC_DN) (>K:AP_PITCH_REF_INC_DN) (>K:AP_PITCH_REF_INC_DN) (>K:AP_PITCH_REF_INC_DN) (>K:AP_PITCH_REF_INC_DN) } }"
+PFD_3F = unassigned
+
+# GMC710 ALT Enc OUTER
+PFD_49 = "1 (A:AUTOPILOT ALTITUDE LOCK VAR, feet) 1000 - (>K:AP_ALT_VAR_SET_ENGLISH) (>H:AP_KNOB_Up)"
+PFD_48 = "1 (A:AUTOPILOT ALTITUDE LOCK VAR, feet) 1000 + (>K:AP_ALT_VAR_SET_ENGLISH) (>H:AP_KNOB_Up)"
+
+# PFD ALT Enc INNER
+PFD_47 = "-1 (>B:AUTOPILOT_ALTITUDE_100_Set)"
+PFD_46 = "1 (>B:AUTOPILOT_ALTITUDE_100_Set)"
+
+# PFD ALT Enc Push
+PFD_58 = "(>B:AS1000_AUTOPILOT_ALTITUDE_PFD_TOGGLE)"
+PFD_59 = unassigned
+
+
+# PFD Softkeys
+# ------------
+# Although activate on release is more accurate, activate on press is more visually responsive
+PFD_9C = "1 (>B:AS1000_SOFTKEY_1_PFD_PUSH)"
+PFD_9D = unassigned
+
+PFD_9E = "1 (>B:AS1000_SOFTKEY_2_PFD_PUSH)"
+PFD_9F = unassigned
+
+PFD_A0 = "1 (>B:AS1000_SOFTKEY_3_PFD_PUSH)"
+PFD_A1 = unassigned
+
+PFD_A2 = "1 (>B:AS1000_SOFTKEY_4_PFD_PUSH)"
+PFD_A3 = unassigned
+
+PFD_A4 = "1 (>B:AS1000_SOFTKEY_5_PFD_PUSH)"
+PFD_A5 = unassigned
+
+# PFD_A6 = "1 (>B:AS1000_SOFTKEY_6_PFD_PUSH)"
+PFD_A6 = "1 (>B:AS1000_SOFTKEY_6_PFD_PUSH)"
+PFD_A7 = unassigned
+
+PFD_A8 = "1 (>B:AS1000_SOFTKEY_7_PFD_PUSH)"
+PFD_A9 = unassigned
+
+PFD_AA = "1 (>B:AS1000_SOFTKEY_8_PFD_PUSH)"
+PFD_AB = unassigned
+
+PFD_AC = "1 (>B:AS1000_SOFTKEY_9_PFD_PUSH)"
+PFD_AD = unassigned
+
+PFD_AE = "1 (>B:AS1000_SOFTKEY_10_PFD_PUSH)"
+PFD_AF = unassigned
+
+PFD_B0 = "1 (>B:AS1000_SOFTKEY_11_PFD_PUSH)"
+PFD_B1 = unassigned
+
+PFD_B2 = "1 (>B:AS1000_SOFTKEY_12_PFD_PUSH)"
+PFD_B3 = unassigned
+
+
+# PFD Right Side
+# --------------
+
+# PFD COM VOL
+PFD_25 = "1 (>B:AS1000_COM_VOLUME_PFD_Dec)"
+PFD_24 = "1 (>B:AS1000_COM_VOLUME_PFD_Inc)"
+
+# PFD COM VOL Push (Squelch)
+PFD_CE = "1 (>B:AS1000_COM_SQUELCH_PUSH_PFD_TOGGLE)"
+PFD_4E_L = "1 (>B:ELECTRICAL_LINE_AVIONICS_BUS_1_TO_PWR_BUS_DISTRIB_TOGGLE)"
+PFD_CF = unassigned
+
+# PFD COM Flip Flop
+# Long press sets radio to energency freq 121.5 (didn't work)
+#PFD_CA = "(E:SIMULATION TIME,second) (L:myTshort) < if{ (>B:AS1000_COM_SWITCH_PFD_PUSH) } els{ (L:AS1000_PFD_SELECTEDCOMINDEX) 1 == if{ 121500000 (>K:COM_RADIO_SET_HZ) } els{ 121500000 (>K:COM2_RADIO_SET_HZ) } } 0 (>L:myTshort)"
+PFD_CA = "(>B:AS1000_COM_SWITCH_PFD_PUSH)"
+PFD_CB = unassigned
+
+# PFD COM OUT
+PFD_6D = "1 (>B:AS1000_COM_LARGE_PFD_Dec)"
+PFD_6C = "1 (>B:AS1000_COM_LARGE_PFD_Inc)"
+
+# PFD COM IN
+PFD_6B = "1 (>B:AS1000_COM_SMALL_PFD_Dec)"
+PFD_6A = "1 (>B:AS1000_COM_SMALL_PFD_Inc)"
+
+# PFD COM Push
+PFD_6E = unassigned
+PFD_6F = "(>B:AS1000_COM_PUSH_PFD_PUSH)"
+
+# PFD Baro Encdr
+# PFD_67 = "1 (>B:AS1000_BARO_PFD_Dec)"
+PFD_67 = "1 (>H:AS1000_PFD_BARO_DEC)"
+# PFD_66 = "1 (>B:AS1000_BARO_PFD_Inc)"
+PFD_66 = "1 (>H:AS1000_PFD_BARO_INC)"
+
+# PFD CRS Encdr
+PFD_69 = "1 (>B:AS1000_COURSE_PFD_Dec)"
+PFD_68 = "1 (>B:AS1000_Course_PFD_Inc)"
+
+# PFD CRS Push
+PFD_70 = "(>B:AS1000_COURSE_PUSH_PFD_PUSH)"
+PFD_71 = unassigned
+
+# PFD PAN Up
+PFD_C6 = "1 0 (>B:AS1000_RANGE_PFD_Set)"
+PFD_C7 = "0 0 (>B:AS1000_RANGE_PFD_Set)"
+
+# PFD PAN Down
+PFD_C8 = "-1 0 (>B:AS1000_RANGE_PFD_Set)"
+PFD_C9 = "0 0 (>B:AS1000_RANGE_PFD_Set)"
+
+# PFD PAN Left
+PFD_C2 = "0 -1 (>B:AS1000_RANGE_PFD_Set)"
+PFD_C3 = "0 0 (>B:AS1000_RANGE_PFD_Set)"
+
+# PFD PAN Right
+# up/down, left right (up +1, down -1, left -1, right +1)
+PFD_C4 = "0 1 (>B:AS1000_RANGE_PFD_Set)"
+PFD_C5 = "0 0 (>B:AS1000_RANGE_PFD_Set)"
+
+# PFD Range Encdr
+PFD_C1 = "1 (>B:AS1000_RANGE_ZOOM_PFD_Dec)"
+PFD_C0 = "1 (>B:AS1000_RANGE_ZOOM_PFD_Inc)"
+
+# PFD Range Push
+PFD_20 = "1 (>B:AS1000_RANGE_PUSH_PFD_Set)"
+PFD_21 = unassigned
+
+# PFD Direct To Btn
+PFD_D2 = unassigned
+PFD_D3 = "(>B:AS1000_DIRECTTO_PFD_PUSH)"
+
+# PFD MENU Btn
+PFD_B8 = unassigned
+PFD_B9 = "1 (>B:AS1000_MENU_PUSH_PFD_PUSH)"
+
+# PFD FPL Btn
+PFD_D4 = unassigned
+PFD_D5 = "(>B:AS1000_FPL_PUSH_PFD_PUSH)"
+
+# PFD PROC Btn
+PFD_B6 = unassigned
+PFD_B7 = "(>B:AS1000_PROC_PUSH_PFD_PUSH)"
+
+# PFD CLR Btn
+# Long press is not possible in the sim currently
+PFD_D6 = "1 (>B:AS1000_CLR_PFD_PUSH)"
+PFD_D7 = unassigned
+
+# Reset map when long press for 2 seconds
+PFD_D6 = "(E:SIMULATION TIME, seconds) (>L:CLR_Press_Start)"
+PFD_D7 = "(E:SIMULATION TIME, seconds) (L:CLR_Press_Start) - 2 > if{ 0 0 (>B:AS1000_RANGE_PFD_Set) 1 (>B:AS1000_RANGE_PFD_ZOOM) } els{ 1 (>B:AS1000_CLR_PFD_Set) }"
+
+# PFD ENT Btn
+PFD_B4 = unassigned
+PFD_B5 = "(>B:AS1000_ENT_PUSH_PFD_PUSH)"
+
+# PFD FMS OUT
+PFD_29 = "1 (>B:AS1000_FMS_LOWER_PFD_Dec)"
+PFD_28 = "1 (>B:AS1000_FMS_LOWER_PFD_Inc)"
+
+# PFD FMS IN
+PFD_27 = "1 (>B:AS1000_FMS_UPPER_PFD_Dec)"
+PFD_26 = "1 (>B:AS1000_FMS_UPPER_PFD_Inc)"
+
+# PFD FMS Push
+PFD_BE = unassigned
+PFD_BF = "(>B:AS1000_FMS_UPPER_PUSH_PFD_PUSH)"
+
+
+# ---------------
+[MFD_Commands]
+# ---------------
+# MFD Left Side
+# ---------------
+
+# MFD NAV VOL Push
+#unsure if toggle is more appropriate: AS1000_NAV_ID_PUSH_MFD_TOGGLE
+MFD_4E = "1 (>B:AS1000_NAV_ID_PUSH_MFD_Set)"
+MFD_4F = "0 (>B:AS1000_NAV_ID_PUSH_MFD_Set)"
+
+# MFD NAV VOL
+#MFD_4D = "(>H:AS1000_MFD_VOL_1_DEC)"
+MFD_4D = "1 (>B:AS1000_NAV_VOLUME_MFD_Dec)"
+#MFD_4C = "(>H:AS1000_MFD_VOL_1_INC)"
+MFD_4C = "1 (>B:AS1000_NAV_VOLUME_MFD_Inc)"
+
+# MFD NAV Flip Flop
+MFD_4A = "(>B:AS1000_NAV_SWITCH_MFD_PUSH)"
+MFD_4B = unassigned
+
+# MFD NAV OUT
+MFD_53 = "1 (>B:AS1000_NAV_LARGE_MFD_Dec)"
+MFD_52 = "1 (>B:AS1000_NAV_LARGE_MFD_Inc)"
+
+# MFD NAV IN
+MFD_51 = "1 (>B:AS1000_NAV_SMALL_MFD_Dec)"
+MFD_50 = "1 (>B:AS1000_NAV_SMALL_MFD_Inc)"
+
+# MFD NAV Push
+MFD_54 = "(>B:AS1000_NAV_PUSH_MFD_PUSH)"
+MFD_55 = unassigned
+
+# MFD HDG Encdr
+MFD_45 = "1 (>B:AS1000_HEADING_MFD_Dec)"
+MFD_44 = "1 (>B:AS1000_HEADING_MFD_Inc)"
+
+# MFD HDG Push
+MFD_56 = "(>B:AS1000_HEADING_SYNC_MFD_PUSH)"
+MFD_57 = unassigned
+
+# MFG AP Btn
+MFD_5C = "(>B:AS1000_AUTOPILOT_AP_MFD_TOGGLE)"
+MFD_5D = unassigned
+
+# MFD FD Btn
+MFD_40 = "(>B:AS1000_AUTOPILOT_FD_MFD_TOGGLE)"
+MFD_41 = unassigned
+
+# MFD HDG Btn
+MFD_64 = "(>B:AS1000_AUTOPILOT_HEADING_MFD_TOGGLE)"
+MFD_65 = unassigned
+
+# MFD ALT Btn
+MFD_42 = "(>B:AS1000_AUTOPILOT_ALTITUDE_MFD_TOGGLE)"
+MFD_43 = unassigned
+
+# MFD NAV Btn
+MFD_62 = "(>B:AS1000_AUTOPILOT_NAVIGATION_MFD_TOGGLE)"
+MFD_63 = unassigned
+
+# MFD VNV Btn
+MFD_3C = "(>B:AS1000_AUTOPILOT_VERTICAL_NAVIGATION_MFD_TOGGLE)"
+MFD_3D = unassigned
+
+# MFD APR Btn
+MFD_60 = "(>B:AS1000_AUTOPILOT_APPROACH_MFD_TOGGLE)"
+MFD_61 = unassigned
+
+# MFD BC Btn
+MFD_3A = "(>B:AS1000_AUTOPILOT_BACKCOURSE_MFD_TOGGLE)"
+MFD_3B = unassigned
+
+# MFD VS btn
+MFD_5E = "(>B:AS1000_AUTOPILOT_VERTICALSPEED_MFD_TOGGLE)"
+MFD_5F = unassigned
+
+# MFD Nose Up Btn
+MFD_38 = "(>B:AS1000_AUTOPILOT_VERTICALSPEED_UP_MFD_PUSH)"
+MFD_39 = unassigned
+
+# MFD FLC Btn
+MFD_5A = "(>B:AS1000_AUTOPILOT_FLIGHTLEVELCHANGE_MFD_TOGGLE)"
+MFD_5B = unassigned
+
+# MDF Nose Dn Btn
+MFD_3E = "(>B:AS1000_AUTOPILOT_VERTICALSPEED_DOWN_MFD_PUSH)"
+MFD_3F = unassigned
+
+# MFD ALT OUT
+# TODO: fix hardware issue in MFD (PFD is ok)
+# outputs both 47 and 49 for DEC
+# outputs both 46 and 48 for INC
+MFD_49 = "1 (>B:AS1000_ALTITUDE_OUTER_MFD_Dec)"
+MFD_48 = "1 (>B:AS1000_ALTITUDE_OUTER_MFD_Inc)"
+
+# MFD ALT IN
+# TODO: fix hardware issue in MFD (PFD is ok)
+MFD_47 = "1 (>B:AS1000_ALTITUDE_INNER_MFD_Dec)"
+MFD_46 = "1 (>B:AS1000_ALTITUDE_INNER_MFD_Inc)"
+
+# MFD ALT Push
+# TODO: MFD push button is sticky. Fix the hardware.
+# May need to replace the dual encoder.Check it is the same type. Oscilliscope it!
+MFD_58 = "(>B:AS1000_AUTOPILOT_ALTITUDE_MFD_TOGGLE)"
+MFD_59 = unassigned
+
+
+# MFD Softkeys
+# ------------
+# Although activate on release is more accurate, activate on press is more visually responsive
+MFD_9C = "1 (>B:AS1000_SOFTKEY_1_MFD_PUSH)"
+MFD_9D = unassigned
+
+MFD_9E = "1 (>B:AS1000_SOFTKEY_2_MFD_PUSH)"
+MFD_9F = unassigned
+
+MFD_A0 = "1 (>B:AS1000_SOFTKEY_3_MFD_PUSH)"
+MFD_A1 = unassigned
+
+MFD_A2 = "1 (>B:AS1000_SOFTKEY_4_MFD_PUSH)"
+MFD_A3 = unassigned
+
+MFD_A4 = "1 (>B:AS1000_SOFTKEY_5_MFD_PUSH)"
+MFD_A5 = unassigned
+
+MFD_A6 = "1 (>B:AS1000_SOFTKEY_6_MFD_PUSH)"
+MFD_A7 = unassigned
+
+MFD_A8 = "1 (>B:AS1000_SOFTKEY_7_MFD_PUSH)"
+MFD_A9 = unassigned
+
+MFD_AA = "1 (>B:AS1000_SOFTKEY_8_MFD_PUSH)"
+MFD_AB = unassigned
+
+MFD_AC = "1 (>B:AS1000_SOFTKEY_9_MFD_PUSH)"
+MFD_AD = unassigned
+
+MFD_AE = "1 (>B:AS1000_SOFTKEY_10_MFD_PUSH)"
+MFD_AF = unassigned
+
+MFD_B0 = "1 (>B:AS1000_SOFTKEY_11_MFD_PUSH)"
+MFD_B1 = unassigned
+
+MFD_B2 = "1 (>B:AS1000_SOFTKEY_12_MFD_PUSH)"
+MFD_B3 = unassigned
+
+
+# MFD Right Side
+# --------------
+
+# MFD COM VOL
+MFD_25 = "1 (>B:AS1000_COM_VOLUME_MFD_Dec)"
+MFD_24 = "1 (>B:AS1000_COM_VOLUME_MFD_Inc)"
+
+# MFD COM VOL Push (Squelch)
+MFD_CE = "1 (>B:AS1000_COM_SQUELCH_PUSH_MFD_TOGGLE)"
+MFD_CF = unassigned
+
+# MFD COM Flip Flop
+# Long press sets radio to energency freq 121.5 (didn't work)
+#MFD_CA = "(E:SIMULATION TIME,second) (L:myTshort) < if{ (>B:AS1000_COM_SWITCH_MFD_PUSH) } els{ (L:AS1000_MFD_SELECTEDCOMINDEX) 1 == if{ 121500000 (>K:COM_RADIO_SET_HZ) } els{ 121500000 (>K:COM2_RADIO_SET_HZ) } } 0 (>L:myTshort)"
+MFD_CA = "(>B:AS1000_COM_SWITCH_MFD_PUSH)"
+MFD_CB = unassigned
+
+# MFD COM OUT
+MFD_6D = "1 (>B:AS1000_COM_LARGE_MFD_Dec)"
+MFD_6C = "1 (>B:AS1000_COM_LARGE_MFD_Inc)"
+
+# MFD COM IN
+MFD_6B = "1 (>B:AS1000_COM_SMALL_MFD_Dec)"
+MFD_6A = "1 (>B:AS1000_COM_SMALL_MFD_Inc)"
+
+# MFD COM Push
+MFD_6E = unassigned
+MFD_6F = "(>B:AS1000_COM_PUSH_PFD_PUSH)"
+
+# MFD Baro Encdr
+MFD_67 = "1 (>B:AS1000_BARO_MFD_Dec)"
+MFD_66 = "1 (>B:AS1000_BARO_MFD_Inc)"
+
+# MFD CRS Encdr
+MFD_69 = "1 (>B:AS1000_COURSE_MFD_Dec)"
+MFD_68 = "1 (>B:AS1000_COURSE_MFD_Inc)"
+
+# MFD CRS Push
+MFD_70 = "(>B:AS1000_COURSE_PUSH_MFD_PUSH)"
+MFD_71 = unassigned
+
+# MFD PAN Up
+MFD_C6 = "1 0 (>B:AS1000_RANGE_MFD_Set)"
+MFD_C7 = "0 0 (>B:AS1000_RANGE_MFD_Set)"
+
+# MFD PAN Down
+MFD_C8 = "-1 0 (>B:AS1000_RANGE_MFD_Set)"
+MFD_C9 = "0 0 (>B:AS1000_RANGE_MFD_Set)"
+
+# MFD PAN Left
+MFD_C2 = "0 -1 (>B:AS1000_RANGE_MFD_Set)"
+MFD_C3 = "0 0 (>B:AS1000_RANGE_MFD_Set)"
+
+# MFD PAN Right
+# up/down, left right (up +1, down -1, left -1, right +1)
+MFD_C4 = "0 1 (>B:AS1000_RANGE_MFD_Set)"
+MFD_C5 = "0 0 (>B:AS1000_RANGE_MFD_Set)"
+
+# MFD Range Encdr
+MFD_C1 = "1 (>B:AS1000_RANGE_ZOOM_MFD_Dec)"
+MFD_C0 = "1 (>B:AS1000_RANGE_ZOOM_MFD_Inc)"
+
+# MFD Range Push
+MFD_20 = "1 (>B:AS1000_RANGE_PUSH_MFD_Set)"
+MFD_21 = unassigned
+
+# MFD Direct To Btn
+MFD_D2 = unassigned
+MFD_D3 = "(>B:AS1000_DIRECTTO_MFD_PUSH)"
+
+# MFD MENU Btn
+MFD_B8 = unassigned
+MFD_B9 = "1 (>B:AS1000_MENU_PUSH_MFD_PUSH)"
+
+# MFD FPL Btn
+MFD_D4 = unassigned
+MFD_D5 = "(>B:AS1000_FPL_PUSH_MFD_PUSH)"
+
+# MFD PROC Btn
+MFD_B6 = unassigned
+MFD_B7 = "(>B:AS1000_PROC_PUSH_MFD_PUSH)"
+
+# MFD CLR Btn
+# Long press is not possible in the sim currently
+MFD_D6 = "1 (>B:AS1000_CLR_MFD_PUSH)"
+MFD_D7 = unassigned
+
+# Reset map when long press for 2 seconds
+MFD_D6 = "(E:SIMULATION TIME, seconds) (>L:CLR_Press_Start)"
+MFD_D7 = "(E:SIMULATION TIME, seconds) (L:CLR_Press_Start) - 2 > if{ 0 0 (>B:AS1000_RANGE_MFD_Set) 1 (>B:AS1000_RANGE_MFD_ZOOM) } els{ 1 (>B:AS1000_CLR_MFD_Set) }"
+
+# MFD ENT Btn
+MFD_B4 = unassigned
+MFD_B5 = "1 (>B:AS1000_ENT_PUSH_MFD_PUSH)"
+
+# MFD FMS OUT
+MFD_28 = "1 (>B:AS1000_FMS_LOWER_MFD_Inc)"
+MFD_29 = "1 (>B:AS1000_FMS_LOWER_MFD_Dec)"
+
+# MFD FMS IN
+MFD_27 = "1 (>B:AS1000_FMS_UPPER_MFD_Dec)"
+MFD_26 = "1 (>B:AS1000_FMS_UPPER_MFD_Inc)"
+
+# MFD FMS Push
+MFD_BE = "(>B:AS1000_FMS_Upper_PUSH_MFD_Toggle)"
+MFD_BF = "(>B:AS1000_FMS_Upper_PUSH_MFD_Neutral)"
+# Yes,releasing the button has a different code altogether. Apparently a coding mistake by MSFS developers! IMPORTANT TO HAVE LIKE THIS!
+
+
+# ---------------
+[RADIO_Commands]
+# ---------------
+
+# COM1 Mic Btn
+RADIO_2A = "(>B:AS1000_COM_1_MIC_MIDCOM_PUSH)"
+RADIO_2B = unassigned
+
+# COM1 Btn
+RADIO_32 = "(>B:AS1000_COM_1_MIDCOM_PUSH)"
+RADIO_33 = unassigned
+
+# COM2 Mic Btn
+RADIO_2C = "(>B:AS1000_COM_2_MIC_MIDCOM_PUSH)"
+RADIO_2D = unassigned
+
+# COM 2 Btn
+RADIO_34 = "(>B:AS1000_COM_2_MIDCOM_PUSH)"
+RADIO_35 = unassigned
+
+# COM3 Mic Btn
+RADIO_2E = "(>B:AS1000_COM_3_MIDCOM_PUSH)"
+RADIO_2F = unassigned
+
+# COM3 Btn
+RADIO_36 = "(>B:AS1000_COM_3_MIC_MIDCOM_PUSH)"
+RADIO_37 = unassigned
+
+# COM 1/2 Btn
+RADIO_30 = "(>B:AS1000_COM_SWAP_MIDCOM_PUSH)"
+RADIO_31 = unassigned
+
+# TEL Btn (Not Used)
+RADIO_72 = unassigned
+RADIO_73 = unassigned
+
+# PA Btn (Not Used)
+RADIO_74 = unassigned
+RADIO_75 = unassigned
+
+# SPKR Btn
+RADIO_76 = "(>B:AS1000_SPEAKER_MIDCOM_PUSH)"
+RADIO_77 = unassigned
+
+# MKR MUTE Btn
+RADIO_78 = "(>B:AS1000_MARKERMUTE_MIDCOM_PUSH)"
+RADIO_79 = unassigned
+
+# HI SENS Btn
+RADIO_7A = "(>B:AS1000_MARKERSENSITIVITYHIGH_MIDCOM_PUSH)"
+RADIO_7B = unassigned
+
+# DME Btn
+RADIO_7C = "(>B:AS1000_DME_MIDCOM_PUSH)"
+RADIO_7D = unassigned
+
+# NAV1 Btn
+RADIO_82 = "(>B:AS1000_NAV_1_MIDCOM_PUSH)"
+RADIO_83 = unassigned
+
+# ADF Btn
+RADIO_7E = "(>B:AS1000_ADF_MIDCOM_PUSH)"
+RADIO_7F = unassigned
+
+# NAV2 Btn
+RADIO_84 = "(>B:AS1000_NAV_2_MIDCOM_PUSH)"
+RADIO_85 = unassigned
+
+# AUX Btn
+RADIO_80 = "(>B:AS1000_AUX_MIDCOM_PUSH)"
+RADIO_81 = unassigned
+
+# MAN SQ Btn
+RADIO_86 = "(>B:AS1000_MAN_SQ_MIDCOM_PUSH)"
+RADIO_87 = unassigned
+
+# PLAY Btn
+RADIO_88 = "(>B:AS1000_PLAY_MIDCOM_PUSH)"
+RADIO_89 = unassigned
+
+# PILOT Btn
+RADIO_8A = "(>B:AS1000_ISOLATEPILOT_MIDCOM_PUSH)"
+RADIO_8B = unassigned
+
+# COPLT Btn
+RADIO_8C = "(>B:AS1000_ISOLATECOPILOT_MIDCOM_PUSH)"
+RADIO_8D = unassigned
+
+# PILOT VOL (Inner) Dec, Inc
+RADIO_93 = "1 (>B:AS1000_AUDIOPANEL_PASS_COPILOT_MIDCOM_Dec)"
+RADIO_92 = "1 (>B:AS1000_AUDIOPANEL_PASS_COPILOT_MIDCOM_Inc)"
+
+# COPLT VOL (Outer) Dec, Inc
+RADIO_95 = "1 (>B:AS1000_AUDIOPANELVOLUME_MIDCOM_Dec)"
+RADIO_94 = "1 (>B:AS1000_AUDIOPANELVOLUME_MIDCOM_Inc)"
+
+# PLT/COPLT Vol PUSH
+RADIO_90 = unassigned
+RADIO_91 = unassigned
+
+# DISPLAY BACKUP (latching btn)
+RADIO_8E = "1 (>B:AS1000_DISPLAYBACKUP_MIDCOM_Set)"
+RADIO_8F = "0 (>B:AS1000_DISPLAYBACKUP_MIDCOM_Set)"

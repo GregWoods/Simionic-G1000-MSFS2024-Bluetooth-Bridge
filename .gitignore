@@ -1,4 +1,37 @@
 /.vs
-/build
-FSUIPC_WASMIF.log
 .claude/settings.local.json
+build/
+install/
+out/
+.vscode/
+.cmake/
+*.log
+*.pdb
+*.ilk
+*.exe
+*.obj
+*.pdf
+CMakeCache.txt
+**/CMakeCache.txt
+*cmake_install.cmake
+**/*.cmake
+**/build/
+**/install/
+**/CMakeFiles/
+*.dir/
+**/*.dir/
+cmake/FSUIPC_WAPI_wrapper/CMakeFiles/
+libs/simpleble/simpleble/CMakeFiles/
+libs/simpleble/simpleble/build/
+libs/simpleble/simpleble/cmake_install.cmake
+
+# Local backup/working copies (from the JanSieb fork)
+* - Kopie*
+* - OK*
+* - fehlerhaft*
+* - ORIGINAL*
+* - restored*
+* 2026-*
+Gemini Briefing.txt
+Simionic_events.txt
+.gitignore_new

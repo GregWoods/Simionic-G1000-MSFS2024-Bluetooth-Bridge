@@ -21,8 +21,8 @@ if (CMAKE_BUILD_TYPE STREQUAL "Release")
 endif()
 
 # Dependencies
-add_subdirectory(libs/simpleble/simpleble)
-add_subdirectory(cmake/FSUIPC_WAPI_wrapper)
+add_subdirectory(libs/simpleble/simpleble EXCLUDE_FROM_ALL)
+add_subdirectory(cmake/FSUIPC_WAPI_wrapper EXCLUDE_FROM_ALL)
 
 function(apply_common_settings target)
     if (MSVC AND CMAKE_BUILD_TYPE STREQUAL "Release")
@@ -35,14 +35,84 @@ function(apply_common_settings target)
 endfunction()
 
 set(SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
-set(MSFS_BLE_BRIDGE_SRC "apps/msfs_ble_bridge_main.cpp")
-set(BLE_SCANNER_SRC "apps/ble_scanner_main.cpp")
+set(SHB1000_MSFS2024_BLE_BRIDGE_SRC "apps/SHB1000_MSFS2024_BLE_Bridge_main.cpp")
 set(BLE_COMMON_SRC "${SRC_DIR}/ble_session.cpp")
 
+include(FetchContent)
 
-# msfs_ble_bridge target
+FetchContent_Declare(
+  nlohmann_json
+  URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+)
+
+set(JSON_Install OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(nlohmann_json)
+
+# main target
+add_executable(SHB1000_MSFS2024_BLE_Bridge
+    "${SHB1000_MSFS2024_BLE_BRIDGE_SRC}"
+    "${BLE_COMMON_SRC}"
+)
+
+# Damit dein Hauptprogramm die Bibliothek findet:
+target_link_libraries(SHB1000_MSFS2024_BLE_Bridge PRIVATE nlohmann_json::nlohmann_json)
+
+target_include_directories(SHB1000_MSFS2024_BLE_Bridge PRIVATE ${SRC_DIR})
+target_link_libraries(SHB1000_MSFS2024_BLE_Bridge PRIVATE
+    simpleble::simpleble
+    FSUIPC_WAPI::FSUIPC_WAPI
+)
+apply_common_settings(SHB1000_MSFS2024_BLE_Bridge)
+install(TARGETS SHB1000_MSFS2024_BLE_Bridge RUNTIME DESTINATION .)
+
+add_custom_command(TARGET SHB1000_MSFS2024_BLE_Bridge POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/SHB1000.config"
+    "$<TARGET_FILE_DIR:SHB1000_MSFS2024_BLE_Bridge>/SHB1000.config"
+    COMMENT "Kopiere SHB1000.config in das Build-Verzeichnis..."
+)
+# Kopiere die Config-Dateien in den Build-Ordner
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/SHB1000_known_devices.config"
+    "${CMAKE_CURRENT_BINARY_DIR}/SHB1000_known_devices.config"
+    COPYONLY
+)
+
+file(GLOB MAP_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.map")
+foreach(MAP_FILE ${MAP_FILES})
+    get_filename_component(FILE_NAME "${MAP_FILE}" NAME)
+    configure_file(
+        "${MAP_FILE}"
+        "${CMAKE_CURRENT_BINARY_DIR}/${FILE_NAME}"
+        COPYONLY
+    )
+endforeach()
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/readme.md"
+    "${CMAKE_CURRENT_BINARY_DIR}/readme.md"
+    COPYONLY
+)
+
+install(FILES "SHB1000_known_devices.config" "SHB1000.config" "readme.md" ${MAP_FILES} DESTINATION .)
+
+
+# ble_scanner target (utility to discover nearby BLE devices and their UUIDs)
+add_executable(ble_scanner
+    "apps/ble_scanner_main.cpp"
+    "${BLE_COMMON_SRC}"
+)
+target_include_directories(ble_scanner PRIVATE ${SRC_DIR})
+target_link_libraries(ble_scanner PRIVATE
+    simpleble::simpleble
+)
+apply_common_settings(ble_scanner)
+install(TARGETS ble_scanner RUNTIME DESTINATION .)
+
+
+# msfs_ble_bridge target (original bridge, configured via default.bleconfig)
 add_executable(msfs_ble_bridge
-    "${MSFS_BLE_BRIDGE_SRC}"
+    "apps/msfs_ble_bridge_main.cpp"
     "${BLE_COMMON_SRC}"
 )
 target_include_directories(msfs_ble_bridge PRIVATE ${SRC_DIR})
@@ -52,17 +122,3 @@ target_link_libraries(msfs_ble_bridge PRIVATE
 )
 apply_common_settings(msfs_ble_bridge)
 install(TARGETS msfs_ble_bridge RUNTIME DESTINATION .)
-
-
-
-# ble_scanner target
-add_executable(ble_scanner
-    "${BLE_SCANNER_SRC}"
-    "${BLE_COMMON_SRC}"
-)
-target_include_directories(ble_scanner      PRIVATE ${SRC_DIR})
-target_link_libraries(ble_scanner PRIVATE
-    simpleble::simpleble
-)
-apply_common_settings(ble_scanner)
-install(TARGETS ble_scanner RUNTIME DESTINATION .)
