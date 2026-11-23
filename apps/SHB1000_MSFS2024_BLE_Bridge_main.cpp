@@ -134,6 +134,18 @@ static std::string g_suggested_map_id;
 static std::atomic<bool> g_interactive_prompt_active{false};
 static std::string g_current_aircraft_title;
 
+// Sets g_interactive_prompt_active for as long as it lives, so the global hotkeys (S, M, 0-4)
+// don't fire while the user is typing an answer. Restores the previous value on every exit path.
+class InteractivePromptGuard {
+public:
+    InteractivePromptGuard() : previous_(g_interactive_prompt_active.exchange(true)) {}
+    ~InteractivePromptGuard() { g_interactive_prompt_active = previous_; }
+    InteractivePromptGuard(const InteractivePromptGuard&) = delete;
+    InteractivePromptGuard& operator=(const InteractivePromptGuard&) = delete;
+private:
+    bool previous_;
+};
+
 // Structure for the commands: Key (e.g. "PFD_C0") -> Command
 using CommandMap = std::unordered_map<std::string, std::string>;
 CommandMap g_commandMaps;
@@ -1715,6 +1727,9 @@ int ble_run_session_scan_until_all_addresses(
     }
     } 
     else {   // --- THE NORMAL WAY (Program start) ---
+        // The setup asks for keys like P/M/A and y/n - suppress the global hotkeys meanwhile
+        InteractivePromptGuard promptGuard;
+
         // 4. AFTER the scan: User verification (in the main thread!)
         for (auto& p : found_candidates) {
             std::string addr = p.address();
