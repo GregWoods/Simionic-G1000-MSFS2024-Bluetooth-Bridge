@@ -71,7 +71,7 @@ static std::atomic<bool> g_ground_alarm_triggered{true};
 // Configuration of filenames (default)
 constexpr const char* CONFIG_FILENAME = "SHB1000.config";             // HARD CODE filename for general settings
 std::string KNOWN_DEVICES_FILENAME = "SHB1000_known_devices.config";  // Variable for the configuration of known devices, pre-assigned with DEFAULT
-std::string COMMANDS_FILENAME = "SHB1000_commands.map";               // Variable for the configuration of commands, pre-assigned with DEFAULT
+std::string COMMANDS_FILENAME = "SHB1000_commands.map";               // Variable for the configuration of commands, pre-assigned with DEFAULT - use get/set_commands_filename()
 
 // Folder the config and map files are read from and written to (the executable's folder, set in main)
 static std::filesystem::path g_config_dir;
@@ -98,9 +98,9 @@ static std::filesystem::path get_executable_dir() {
     }
 }
 
-bool g_discoveryFinished = false; // Is only set to true when the setup dialog is finished
+std::atomic<bool> g_discoveryFinished{false}; // Is only set to true when the setup dialog is finished
 bool initialBrightnessSet = false;  // If the brightness of the backlight has been initially set
-bool g_print_commands_to_console = false; // If true, ble commands and mappings are printed to std::cout
+std::atomic<bool> g_print_commands_to_console{false}; // If true, ble commands and mappings are printed to std::cout
 
 std::atomic<bool> g_trigger_auto_reconnect{false}; // Trigger flag for auto-reconnect
 
@@ -142,13 +142,27 @@ static void from_json(const json& j, HardwareDevice& dev) {
 }
 
 // List of known devices
+// g_knownDevices and lastSessionDevices are used by the main/console thread and the BLE callback threads,
+// so every access must hold g_devicesMutex. Never wait for user input while holding it.
+// Lock order (if more than one is needed): g_consoleMutex -> g_ble.m -> g_devicesMutex
+static std::recursive_mutex g_devicesMutex;
 static std::vector<HardwareDevice> g_knownDevices;
 
-// Stores the history (the last 5 timestamps) of the calls per role and dial/button
+// Stores the history (the last 5 timestamps) of the calls per role and dial/button (BLE threads, guarded by g_inputTimesMutex)
+static std::mutex g_inputTimesMutex;
 static std::unordered_map<std::string, std::vector<std::chrono::steady_clock::time_point>> last_input_times;
 
-// This vector holds the snapshot of the last successful connection
+// This vector holds the snapshot of the last successful connection (guarded by g_devicesMutex)
 std::map<std::string, std::string> lastSessionDevices; // Key: Role, Value: MAC
+
+// Returns the current role (PFD, MFD, RADIO) of a device, or "" if the MAC is unknown
+static std::string find_role_for_mac(const std::string& cleanMac) {
+    std::lock_guard<std::recursive_mutex> lock(g_devicesMutex);
+    for (const auto& dev : g_knownDevices) {
+        if (dev.address == cleanMac) return dev.instrument;
+    }
+    return "";
+}
 
 // New structure for the global hardware settings from [Settings]
 struct AircraftHistoryEntry {
@@ -196,7 +210,26 @@ static std::mutex g_pending_aircraft_mutex;
 static std::string g_pending_new_aircraft;
 static std::string g_suggested_map_id;
 static std::atomic<bool> g_interactive_prompt_active{false};
-static std::string g_current_aircraft_title;
+static std::string g_current_aircraft_title; // Use get/set_current_aircraft_title()
+
+// g_current_aircraft_title and COMMANDS_FILENAME are written on the SimConnect thread and read on the console threads
+static std::mutex g_mapSelectionMutex;
+static std::string get_current_aircraft_title() {
+    std::lock_guard<std::mutex> lock(g_mapSelectionMutex);
+    return g_current_aircraft_title;
+}
+static void set_current_aircraft_title(const std::string& title) {
+    std::lock_guard<std::mutex> lock(g_mapSelectionMutex);
+    g_current_aircraft_title = title;
+}
+static std::string get_commands_filename() {
+    std::lock_guard<std::mutex> lock(g_mapSelectionMutex);
+    return COMMANDS_FILENAME;
+}
+static void set_commands_filename(const std::string& filename) {
+    std::lock_guard<std::mutex> lock(g_mapSelectionMutex);
+    COMMANDS_FILENAME = filename;
+}
 
 // Sets g_interactive_prompt_active for as long as it lives, so the global hotkeys (S, M, 0-4)
 // don't fire while the user is typing an answer. Restores the previous value on every exit path.
@@ -222,12 +255,17 @@ static std::shared_ptr<const CommandMap> get_command_map() {
     return g_commandMaps;
 }
 
-// Globals to track dynamic long presses
-static std::atomic<bool> generic_long_press_active{false};
-static std::atomic<int> generic_long_press_token{0};
-static std::atomic<uint8_t> generic_long_press_byte{0}; // Track which byte is being held
-static std::string generic_short_press_cmd; // To execute if released early
-static std::string generic_role; // To use for logging/executing
+// Long press tracking, one state per device (MAC), so holding buttons on two bezels doesn't interfere.
+// Written by BLE callback threads and read by the long-press timer threads, so guarded by g_longPressMutex.
+struct LongPressState {
+    bool active = false;
+    int token = 0;              // Incremented on every press/release; a timer only fires if its token is still current
+    uint8_t byte = 0;           // Which byte is being held
+    std::string short_cmd;      // To execute if released early (can be empty if only _L is configured)
+    std::string role;           // To use for logging
+};
+static std::mutex g_longPressMutex;
+static std::unordered_map<std::string, LongPressState> g_longPress; // Key: device MAC
 
 // Stores the active Bluetooth connections to send commands (such as lights)
 static std::map<std::string, SimpleBLE::Peripheral> g_activePeripherals;
@@ -317,13 +355,17 @@ private:
     SimRateControlConfig config;
     std::vector<double> rolling_array;
     size_t array_index = 0;
-    std::atomic<bool> system_active{false}; 
+    std::atomic<bool> system_active{false};
+
+    // Used by the telemetry thread, the console thread and BLE threads: all state below is guarded by mtx
+    // (system_active and current_sim_rate are atomics, because the reset thread in deactivate reads them unlocked)
+    std::mutex mtx;
     
     enum State { STABLE, UNSTABLE };
     State current_state = STABLE;
     
     double last_peak_amplitude = 0.0;
-    int current_sim_rate = 1; 
+    std::atomic<int> current_sim_rate{1};
     
     using time_point = std::chrono::steady_clock::time_point;
     time_point last_downshift_time;
@@ -395,7 +437,8 @@ public:
         rolling_array.resize(config.window_size, 0.0);
     }
 
-    void deactivate() {
+    // Caller must hold mtx
+    void deactivate_locked() {
         if (!system_active) return;
         system_active = false;
         std::fill(rolling_array.begin(), rolling_array.end(), 0.0);
@@ -421,9 +464,15 @@ public:
         }).detach();
     }
 
+    void deactivate() {
+        std::lock_guard<std::mutex> lock(mtx);
+        deactivate_locked();
+    }
+
     void toggleActive() {
+        std::lock_guard<std::mutex> lock(mtx);
         if (system_active) {
-             deactivate();
+             deactivate_locked();
         } else {
              system_active = true;
              // Reset timers to strictly enforce initial waits when (re)activated
@@ -434,9 +483,8 @@ public:
     }
 
     bool isActive() const { return system_active; }
-    SimRateControlConfig& getConfig() { return config; }
-
     void processTelemetry(double v_speed_fps, int sim_rate) {
+        std::lock_guard<std::mutex> lock(mtx);
         current_sim_rate = sim_rate;
         auto now = std::chrono::steady_clock::now();
         
@@ -538,7 +586,7 @@ public:
             std::lock_guard<std::mutex> lock(g_consoleMutex);
             std::string state_str_display = (current_state == UNSTABLE) ? (bouncing ? "BOUNCING " : "UNSTABLE ") : "STABLE   ";
             std::cout << "[" << std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() << "] "
-                      << "| SimRate: " << current_sim_rate << "x "
+                      << "| SimRate: " << current_sim_rate.load() << "x "
                       << "| Raw_Y: " << std::fixed << std::setprecision(2) << std::showpos << v_speed_fps << std::noshowpos
                       << " | Filtered_Y: " << std::showpos << filtered_y << std::noshowpos
                       << " | Array_State: " << state_str_display
@@ -616,7 +664,7 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
             if (pObjData->dwRequestID == REQUEST_AIRCRAFT_TITLE) {
                 AircraftData* pAircraftData = (AircraftData*)&pObjData->dwData;
                 std::string title = pAircraftData->title;
-                g_current_aircraft_title = title;
+                set_current_aircraft_title(title);
                 std::string map_id = g_settings.default_map_id;
 
                 bool is_new_aircraft = false;
@@ -647,8 +695,8 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
                     // Temporarily load suggested map or default so it's not entirely empty
                     auto map_it = g_settings.map_definitions.find(suggested_map);
                     if (map_it != g_settings.map_definitions.end()) {
-                        COMMANDS_FILENAME = map_it->second;
-                        load_command_map(COMMANDS_FILENAME);
+                        set_commands_filename(map_it->second);
+                        load_command_map(map_it->second);
                     }
                 } else {
                     // Normal known aircraft update path
@@ -666,17 +714,17 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
                     // Match with map filenames
                     auto map_it = g_settings.map_definitions.find(map_id);
                     if (map_it != g_settings.map_definitions.end()) {
-                        COMMANDS_FILENAME = map_it->second;
+                        set_commands_filename(map_it->second);
                     }
 
                     {
                         std::lock_guard<std::mutex> lock(g_consoleMutex);
                         std::cout << "\n[SIMCONNECT] Currently used Aircraft: " << title;
-                        std::cout << "\n[SIMCONNECT] Auto loaded Map ID: " << map_id << " (" << COMMANDS_FILENAME << ")\n";
+                        std::cout << "\n[SIMCONNECT] Auto loaded Map ID: " << map_id << " (" << get_commands_filename() << ")\n";
                         std::cout << "PRESS 'M' TO RELOAD MAP | 'R' TO RECONNECT | 'S' TO SWAP ROLES | 'L' TO ASSIGN ROLES | '?' FOR AIRCRAFT | 'Q' TO QUIT" << std::endl;
                     }
                     
-                    load_command_map(COMMANDS_FILENAME);
+                    load_command_map(get_commands_filename());
                 }
             } else if (pObjData->dwRequestID == REQUEST_ORBIT_DATA) {
                 OrbitData* pOrbitData = (OrbitData*)&pObjData->dwData;
@@ -834,7 +882,7 @@ static BleRuntime g_ble;
 // Configuration for Combo 
 const std::chrono::milliseconds COMBO_WINDOW(250);
 std::atomic<uint8_t> pending_first_key(0x00); 
-std::chrono::steady_clock::time_point first_key_time;
+std::atomic<std::chrono::steady_clock::rep> first_key_time_ticks{0}; // steady_clock ticks of the first combo key (BLE threads)
 std::atomic<bool> combo_active_block(false);
 
 // Beep() is synchronous and can take seconds, so all sounds are played one after another on a single
@@ -928,9 +976,9 @@ static void perform_role_switch(bool play_beep = true) {
     g_role_swapped_state = !g_role_swapped_state;
 
     {
-        // We briefly lock the BLE object so that on_packet does not read at the same time
-        std::lock_guard<std::mutex> lock(g_ble.m);
-        
+        // Lock the device list so that on_packet does not read it at the same time
+        std::lock_guard<std::recursive_mutex> lock(g_devicesMutex);
+
         // Step 1: Mark intention for ALL active devices (even if temporarly disconnected)
         for (auto& dev : g_knownDevices) {
             if (dev.instrument == "PFD") {
@@ -1179,10 +1227,12 @@ bool load_known_devices(const std::string& filename) {
         json j;
         file >> j;
 
-        g_knownDevices.clear();
+        std::vector<HardwareDevice> loaded;
         for (const auto& item : j["devices"]) {
-            g_knownDevices.push_back(item.get<HardwareDevice>());
+            loaded.push_back(item.get<HardwareDevice>());
         }
+        std::lock_guard<std::recursive_mutex> lock(g_devicesMutex);
+        g_knownDevices = std::move(loaded);
     } catch (json::parse_error& e) {
         std::cerr << "JSON Error: " << e.what() << std::endl;
         return false;
@@ -1273,8 +1323,11 @@ void save_known_devices() {
     nlohmann::json j;
     j["devices"] = nlohmann::json::array();
 
-    for (const auto& dev : g_knownDevices) {
-        j["devices"].push_back(dev);
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_devicesMutex);
+        for (const auto& dev : g_knownDevices) {
+            j["devices"].push_back(dev);
+        }
     }
 
     // KNOWN_DEVICES_FILENAME is the file the devices were loaded from (device_map_file, or the default if not configured)
@@ -1288,29 +1341,30 @@ void save_known_devices() {
 
 // Function for a snapshot of the connected devices at the end of the discovery phase
 void update_last_session_snapshot() {
-    lastSessionDevices.clear();
     std::cout << "[INFO] Creating a snapshot for fast reconnect:" << std::endl;
 
-    for (auto const& [key, peripheral] : g_activePeripherals) {
-        auto& p = const_cast<SimpleBLE::Peripheral&>(peripheral); 
-        std::string currentMac = p.address();
-        
-        // We search for the actual role in the g_knownDevices list,
-        std::string realRole = "Unknown";
-        std::string cleanMac;
-        canonicalize_mac(currentMac, cleanMac);
-
-        for (const auto& dev : g_knownDevices) {
-            if (dev.address == cleanMac) {
-                realRole = dev.instrument; // Here we get "PFD", "MFD" etc.
-                break;
-            }
+    // Copy the connected MACs first (g_activePeripherals is guarded by g_ble.m)
+    std::vector<std::string> connectedMacs;
+    {
+        std::lock_guard<std::mutex> lock(g_ble.m);
+        for (auto const& [key, peripheral] : g_activePeripherals) {
+            auto& p = const_cast<SimpleBLE::Peripheral&>(peripheral);
+            std::string cleanMac;
+            canonicalize_mac(p.address(), cleanMac);
+            connectedMacs.push_back(cleanMac);
         }
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(g_devicesMutex);
+    lastSessionDevices.clear();
+    for (const auto& cleanMac : connectedMacs) {
+        // We search for the actual role in the g_knownDevices list,
+        std::string realRole = find_role_for_mac(cleanMac); // Here we get "PFD", "MFD" etc.
+        if (realRole.empty()) realRole = "Unknown";
 
         lastSessionDevices[realRole] = cleanMac;
         std::cout << "  -> Role: " << realRole << " | MAC: " << cleanMac << std::endl;
     }
-
 }
 
 // Helper function: Sends commands to the Sim safely with a mutex lock
@@ -1326,6 +1380,51 @@ static void send_calc_code_safely(const std::string& code) {
     wasmPtr->executeCalclatorCode(ccode.data());
 }
 
+// Clears the fast-turn history of one input (guarded, BLE threads)
+static void reset_input_history(const std::string& inputKey) {
+    std::lock_guard<std::mutex> lock(g_inputTimesMutex);
+    last_input_times.erase(inputKey);
+}
+
+// Records an input and returns how many times its command should be sent (fast-turn acceleration)
+static int record_input_and_get_repetitions(const std::string& inputKey) {
+    std::lock_guard<std::mutex> lock(g_inputTimesMutex);
+    auto now = std::chrono::steady_clock::now();
+
+    auto& history = last_input_times[inputKey];
+
+    // If the last input is older than config value, we consider it a new turn movement and clear the history (smoothing reset).
+    if (!history.empty()) {
+        auto time_since_last = std::chrono::duration_cast<std::chrono::milliseconds>(now - history.back()).count();
+        if (time_since_last > g_settings.newTurnPause) {
+            history.clear();
+        }
+    }
+
+    history.push_back(now);
+
+    // Keep a maximum of the last 5 timestamps in the buffer
+    if (history.size() > 5) {
+        history.erase(history.begin());
+    }
+
+    int repetitions = 1; // Count as 1 step by default
+
+    // Only with 2 or more stored timestamps can we calculate an average difference
+    if (history.size() >= 2) {
+        auto total_diff = std::chrono::duration_cast<std::chrono::milliseconds>(history.back() - history.front()).count();
+        auto avg_diff = total_diff / static_cast<long long>(history.size() - 1);
+
+        // Two-stage threshold for turning
+        if (avg_diff > 0 && avg_diff <= g_settings.fastTurnSensitivity2) {
+            repetitions = g_settings.fastTurnIncrements2; // Steps for fast turning
+        } else if (avg_diff > 0 && avg_diff <= g_settings.fastTurnSensitivity1) {
+            repetitions = g_settings.fastTurnIncrements1; // Steps for brisk turning
+        }
+    }
+    return repetitions;
+}
+
 // Handler for incoming Bluetooth packets from the devices
 void on_packet(const SimpleBLE::ByteArray& bytes, const std::string& devTag) {
     // 1. Normalize MAC
@@ -1338,28 +1437,32 @@ void on_packet(const SimpleBLE::ByteArray& bytes, const std::string& devTag) {
         std::cout << "\n[SYSTEM] SimRate Auto-Correction deactivated by device input.\n";
     }
 
-    // 1. Find out which ROLE this MAC currently has
-    std::string role = "";
-    for (const auto& dev : g_knownDevices) {
-        if (dev.address == cleanMac) {
-            role = dev.instrument; // e.g., "PFD"
-            break;
-        }
-    }
+    // 1. Find out which ROLE this MAC currently has (e.g. "PFD")
+    std::string role = find_role_for_mac(cleanMac);
     if (role.empty()) return;
 
     uint8_t rawByte = (uint8_t)bytes[0];
 
     // --- Generic Long Press Evaluation (Release check) ---
     // Evaluated unconditionally before mapping checks since release bytes might not be mapped
-    if (generic_long_press_active.load() && rawByte == (uint8_t)(generic_long_press_byte.load() + 1)) {
-        generic_long_press_active.store(false);
-        generic_long_press_token++; // Invalidate timer thread
-        if (!generic_short_press_cmd.empty()) {
-            if (g_print_commands_to_console) {
-                std::cout << "[COMMAND] " << generic_role << " mapped byte 0x" << std::hex << std::uppercase << (int)generic_long_press_byte.load() << std::nouppercase << std::dec << " (short press) to: " << generic_short_press_cmd << "\n";
+    {
+        bool released = false;
+        LongPressState released_state;
+        {
+            std::lock_guard<std::mutex> lock(g_longPressMutex);
+            auto it = g_longPress.find(cleanMac);
+            if (it != g_longPress.end() && it->second.active && rawByte == (uint8_t)(it->second.byte + 1)) {
+                it->second.active = false;
+                it->second.token++; // Invalidate timer thread
+                released = true;
+                released_state = it->second;
             }
-            send_calc_code_safely(generic_short_press_cmd);
+        }
+        if (released && !released_state.short_cmd.empty()) {
+            if (g_print_commands_to_console) {
+                std::cout << "[COMMAND] " << released_state.role << " mapped byte 0x" << std::hex << std::uppercase << (int)released_state.byte << std::nouppercase << std::dec << " (short press) to: " << released_state.short_cmd << "\n";
+            }
+            send_calc_code_safely(released_state.short_cmd);
         }
     }
 
@@ -1368,7 +1471,7 @@ void on_packet(const SimpleBLE::ByteArray& bytes, const std::string& devTag) {
     // So any byte B ends the acceleration history of B-1: pressing a toggle twice quickly never accelerates,
     // while continuous encoder turns still do.
     if (rawByte > 0) {
-        last_input_times.erase(role + "_" + std::to_string(rawByte - 1));
+        reset_input_history(role + "_" + std::to_string(rawByte - 1));
     }
 
     std::stringstream key_stream;
@@ -1400,45 +1503,8 @@ void on_packet(const SimpleBLE::ByteArray& bytes, const std::string& devTag) {
     if (has_short_command || has_long_command) {
             
             // Speedy dial turn functionality ---
-            // Generate key to identify exactly this button of this device
-            std::string inputKey = role + "_" + std::to_string(rawByte);
-            auto now = std::chrono::steady_clock::now();
-            
-            auto& history = last_input_times[inputKey];
-            
-            // If the last input is older than config value, we consider it a new turn movement and clear the history (smoothing reset).
-            if (!history.empty()) {
-                auto time_since_last = std::chrono::duration_cast<std::chrono::milliseconds>(now - history.back()).count();
-                if (time_since_last > g_settings.newTurnPause) {
-                    history.clear();
-                }
-            }
-            
-            history.push_back(now);
-            
-            // Keep a maximum of the last 5 timestamps in the buffer
-            if (history.size() > 5) {
-                history.erase(history.begin());
-            }
-            
-            int repetitions = 1; // Count as 1 step by default
-            
-            // Only with 2 or more stored timestamps can we calculate an average difference
-            if (history.size() >= 2) {
-                auto total_diff = std::chrono::duration_cast<std::chrono::milliseconds>(history.back() - history.front()).count();
-                auto avg_diff = total_diff / (history.size() - 1);
-                
-                // Two-stage threshold for turning
-                if (avg_diff > 0 && avg_diff <= g_settings.fastTurnSensitivity2) {
-                    repetitions = g_settings.fastTurnIncrements2; // Steps for fast turning
-                } else if (avg_diff > 0 && avg_diff <= g_settings.fastTurnSensitivity1) {
-                    repetitions = g_settings.fastTurnIncrements1; // Steps for brisk turning
-                }
-
-                // DEBUG: Output of the average time difference
-//                std::cout << "[DEBUG] " << inputKey << " Average time difference (" << history.size() << " points): " << avg_diff << " ms  -> " << repetitions << " repetitions" << std::endl;
-
-            }
+            // Key to identify exactly this button of this device
+            int repetitions = record_input_and_get_repetitions(role + "_" + std::to_string(rawByte));
 
             // COMBO LOGIC for 0x5E (FLC) and 0x5A (VS)
             if (rawByte == 0x5E || rawByte == 0x5A) {
@@ -1446,7 +1512,7 @@ void on_packet(const SimpleBLE::ByteArray& bytes, const std::string& devTag) {
                 if (pending == 0) {
                     // No key waiting
                     pending_first_key.store(rawByte);
-                    first_key_time = std::chrono::steady_clock::now();
+                    first_key_time_ticks = std::chrono::steady_clock::now().time_since_epoch().count();
                     
                     // Launch timeout worker
                     std::thread([rawByte, command, repetitions, role]() {
@@ -1479,6 +1545,7 @@ void on_packet(const SimpleBLE::ByteArray& bytes, const std::string& devTag) {
                 } else {
                     // A key is already waiting
                     if ((pending == 0x5E && rawByte == 0x5A) || (pending == 0x5A && rawByte == 0x5E)) {
+                        std::chrono::steady_clock::time_point first_key_time{std::chrono::steady_clock::duration(first_key_time_ticks.load())};
                         auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - first_key_time);
                         if (delta <= COMBO_WINDOW) {
                             // Combo Detected!
@@ -1505,16 +1572,29 @@ void on_packet(const SimpleBLE::ByteArray& bytes, const std::string& devTag) {
 
             // --- Generic Long Press Evaluation (Press check) ---
             if (has_long_command) {
-                generic_long_press_byte.store(rawByte);
-                generic_short_press_cmd = command; // Can be empty if only _l is configured
-                generic_role = role;
-                generic_long_press_active.store(true);
-                int token = ++generic_long_press_token;
+                int token;
+                {
+                    std::lock_guard<std::mutex> lock(g_longPressMutex);
+                    auto& state = g_longPress[cleanMac];
+                    state.byte = rawByte;
+                    state.short_cmd = command; // Can be empty if only _l is configured
+                    state.role = role;
+                    state.active = true;
+                    token = ++state.token;
+                }
 
-                std::thread([token, rawByte, longCommand, role]() {
+                std::thread([token, rawByte, longCommand, role, cleanMac]() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(g_settings.longPressDelayMs));
-                    if (generic_long_press_active.load() && generic_long_press_token.load() == token) {
-                        generic_long_press_active.store(false); // Timer expired, consumed long press
+                    bool fire = false;
+                    {
+                        std::lock_guard<std::mutex> lock(g_longPressMutex);
+                        auto it = g_longPress.find(cleanMac);
+                        if (it != g_longPress.end() && it->second.active && it->second.token == token) {
+                            it->second.active = false; // Timer expired, consumed long press
+                            fire = true;
+                        }
+                    }
+                    if (fire) {
                         send_calc_code_safely(longCommand);
                         if (g_print_commands_to_console) {
                             std::cout << "\n[COMMAND] " << role << " Long press 0x" << std::hex << std::uppercase << (int)rawByte << std::nouppercase << std::dec << " detected! Executing: " << longCommand << "\n";
@@ -1693,10 +1773,13 @@ int ble_run_session_scan_until_all_addresses(
 
     // Extract unique device types from known devices for dynamic matching
     std::vector<std::string> valid_types;
-    for (const auto& dev : g_knownDevices) {
-        if (!dev.type.empty() && dev.type != "UNKNOWN" && dev.type != "unknown") {
-            if (std::find(valid_types.begin(), valid_types.end(), dev.type) == valid_types.end()) {
-                valid_types.push_back(dev.type);
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_devicesMutex);
+        for (const auto& dev : g_knownDevices) {
+            if (!dev.type.empty() && dev.type != "UNKNOWN" && dev.type != "unknown") {
+                if (std::find(valid_types.begin(), valid_types.end(), dev.type) == valid_types.end()) {
+                    valid_types.push_back(dev.type);
+                }
             }
         }
     }
@@ -1817,8 +1900,11 @@ int ble_run_session_scan_until_all_addresses(
             // --- THE SHORTCUT (FAST-LANE) ---
             // 1. Get role from the snapshot (lastSessionDevices)
             std::string role = "";
-            for (auto const& [r, m] : lastSessionDevices) {
-                if (m == clean_addr) { role = r; break; }
+            {
+                std::lock_guard<std::recursive_mutex> lock(g_devicesMutex);
+                for (auto const& [r, m] : lastSessionDevices) {
+                    if (m == clean_addr) { role = r; break; }
+                }
             }
 
             if (!role.empty()) {
@@ -1901,19 +1987,28 @@ int ble_run_session_scan_until_all_addresses(
         for (auto& p : found_candidates) {
             std::string addr = p.address();
             
-            // Find the associated instrument in g_knownDevices
-            auto it = std::find_if(g_knownDevices.begin(), g_knownDevices.end(),
-                                [&](const HardwareDevice& d) { return d.address == addr; });
-            
-            if (it != g_knownDevices.end()) {
-                std::cout << "\nFound: " << it->instrument << " (" << addr << ")" << std::endl;
-                std::cout << "Should this device be connected as '" << it->instrument << "'? (y/n): ";
+            // Find the associated instrument in g_knownDevices (copy it, the prompt below waits for input)
+            std::string knownInstrument;
+            bool isKnown = false;
+            {
+                std::lock_guard<std::recursive_mutex> lock(g_devicesMutex);
+                auto it = std::find_if(g_knownDevices.begin(), g_knownDevices.end(),
+                                    [&](const HardwareDevice& d) { return d.address == addr; });
+                if (it != g_knownDevices.end()) {
+                    isKnown = true;
+                    knownInstrument = it->instrument;
+                }
+            }
+
+            if (isKnown) {
+                std::cout << "\nFound: " << knownInstrument << " (" << addr << ")" << std::endl;
+                std::cout << "Should this device be connected as '" << knownInstrument << "'? (y/n): ";
                 
                 char choice;
                 std::cin >> choice;
                 
                 if (choice == 'y' || choice == 'Y' || choice == 'j' || choice == 'J') {
-                    std::cout << "[INFO] Connecting to " << it->instrument << "..." << std::endl;
+                    std::cout << "[INFO] Connecting to " << knownInstrument << "..." << std::endl;
                 }
             }
         }
@@ -1948,6 +2043,7 @@ int ble_run_session_scan_until_all_addresses(
                 std::string defLabel = "K"; 
                 bool foundInConfig = false;
 
+                std::unique_lock<std::recursive_mutex> defaultRoleLock(g_devicesMutex);
                 for (const auto& dev : g_knownDevices) {
                     std::string cleanDevAddr;
                     canonicalize_mac(dev.address, cleanDevAddr);
@@ -1960,6 +2056,7 @@ int ble_run_session_scan_until_all_addresses(
                         break;
                     }
                 }
+                defaultRoleLock.unlock(); // Don't hold it while waiting for input
 
                 // 2. Display prompt
                 // (without the value at the end - that comes in a moment)
@@ -2000,6 +2097,7 @@ int ble_run_session_scan_until_all_addresses(
                         return ss.str();
                     };
 
+                    std::lock_guard<std::recursive_mutex> devicesLock(g_devicesMutex);
                     for (auto& dev : g_knownDevices) {
                         std::string cleanDevAddr;
                         canonicalize_mac(dev.address, cleanDevAddr);
@@ -2122,7 +2220,12 @@ int ble_run_session_scan_until_all_addresses(
     }
 
     // Initial backlight setting
-    if (!initialBrightnessSet && g_discoveryFinished && !g_ble.connected.empty()) {
+    bool anyConnected;
+    {
+        std::lock_guard<std::mutex> lk(g_ble.m);
+        anyConnected = !g_ble.connected.empty();
+    }
+    if (!initialBrightnessSet && g_discoveryFinished && anyConnected) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
        
         send_brightness_to_all(g_settings.defaultBrightness);
@@ -2244,13 +2347,14 @@ int ble_run_session_scan_until_all_addresses(
             }
 
             if (ch == 'a' || ch == 'A') {
-                if (g_current_aircraft_title.empty()) {
+                const std::string aircraftTitle = get_current_aircraft_title();
+                if (aircraftTitle.empty()) {
                     std::cout << "\n[SYSTEM] No aircraft loaded yet. Cannot assign map.\n";
                     continue;
                 }
                 
                 g_interactive_prompt_active = true;
-                std::cout << "\n[SYSTEM] Re-assign command map for '" << g_current_aircraft_title << "'? [Y/N] (timeouts in 5s)...";
+                std::cout << "\n[SYSTEM] Re-assign command map for '" << aircraftTitle << "'? [Y/N] (timeouts in 5s)...";
                 
                 int wait_ms = 5000;
                 bool confirmed = false;
@@ -2272,7 +2376,7 @@ int ble_run_session_scan_until_all_addresses(
                     std::cout << " Cancelled.\n[SYSTEM] Current map assignment kept.\n";
                 } else {
                     std::cout << " Y\n";
-                    interactive_map_selection(g_current_aircraft_title);
+                    interactive_map_selection(aircraftTitle);
                 }
                 
                 g_interactive_prompt_active = false;
@@ -2300,7 +2404,12 @@ int ble_run_session_scan_until_all_addresses(
                 g_interactive_prompt_active = true;
                 std::cout << "\n--- Manual Role Assignment ---\n";
                 bool changed = false;
-                for (auto& dev : g_knownDevices) {
+                std::vector<HardwareDevice> devicesCopy;
+                {
+                    std::lock_guard<std::recursive_mutex> lock(g_devicesMutex);
+                    devicesCopy = g_knownDevices;
+                }
+                for (auto& dev : devicesCopy) {
                     if (dev.address.empty()) continue;
                     std::cout << "Device: " << dev.ble_name << " [" << dev.address << "] is currently: " << dev.instrument << "\n";
                     std::cout << "Enter new role (P=PFD, M=MFD, R=RADIO), or any other key to keep: ";
@@ -2324,6 +2433,12 @@ int ble_run_session_scan_until_all_addresses(
                          else if (choice == 'M') dev.instrument = "MFD";
                          else if (choice == 'R') dev.instrument = "RADIO";
                          changed = true;
+
+                         // Apply to the shared list (by address; the list may have changed meanwhile)
+                         std::lock_guard<std::recursive_mutex> lock(g_devicesMutex);
+                         for (auto& known : g_knownDevices) {
+                             if (known.address == dev.address) known.instrument = dev.instrument;
+                         }
                     }
                     std::cout << " -> Final role: " << dev.instrument << "\n\n";
                 }
@@ -2410,10 +2525,24 @@ int ble_run_session_scan_until_all_addresses(
 // Function to trigger a fast reconnect to lost Bluetooth devices based on the session snapshot.
 // Called from the console loop; returns to it once the reconnect attempt is finished.
 void trigger_fast_reconnect() {
-    if (lastSessionDevices.empty()) return;
+    // Copy the snapshot (guarded by g_devicesMutex)
+    std::map<std::string, std::string> snapshot;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_devicesMutex);
+        snapshot = lastSessionDevices;
+    }
+    if (snapshot.empty()) return;
     std::cout << "[RECONNECT] Disconnecting old devices asynchronously" << std::endl;
 
-    for (auto& [role, peripheral] : g_activePeripherals) {
+    // 1. Take the old connections out of the shared maps, so we have room for the new objects
+    std::map<std::string, SimpleBLE::Peripheral> oldPeripherals;
+    {
+        std::lock_guard<std::mutex> lk(g_ble.m);
+        oldPeripherals.swap(g_activePeripherals);
+        g_ble.connected.clear();
+    }
+
+    for (auto& [role, peripheral] : oldPeripherals) {
         std::thread([p = peripheral]() mutable {
                 try {
                     if (p.is_connected()) {
@@ -2423,16 +2552,9 @@ void trigger_fast_reconnect() {
             }).detach(); // Run in the background
     }
 
-    // 2. IMPORTANT: Clear maps immediately so we have room for the new objects
-    g_activePeripherals.clear(); 
-    {
-        std::lock_guard<std::mutex> lk(g_ble.m);
-        g_ble.connected.clear();
-    }
-
     // 2. Prepare structure (unordered_set)
     std::unordered_set<std::string> macsToFind;
-    for (auto const& [role, mac] : lastSessionDevices) {
+    for (auto const& [role, mac] : snapshot) {
         macsToFind.insert(mac); // Pulls the MACs from the map for ble_run... function
     }
     
@@ -2453,8 +2575,14 @@ static void send_brightness_to_all(uint8_t level) {
     SimpleBLE::ByteArray data;
     data.push_back(level); 
 
-    // We use g_ble.connected as all info (p, service, char) is stored there
-    for (auto& [mac, device] : g_ble.connected) {
+    // We use g_ble.connected as all info (p, service, char) is stored there.
+    // Copy it under the lock, then write without holding it (BLE writes can take a while)
+    std::vector<std::pair<std::string, ConnectedDevice>> devices;
+    {
+        std::lock_guard<std::mutex> lk(g_ble.m);
+        for (auto& [mac, device] : g_ble.connected) devices.push_back({mac, device});
+    }
+    for (auto& [mac, device] : devices) {
         if (!device.p.is_connected()) continue;
         
         try {
@@ -2519,8 +2647,8 @@ static void interactive_map_selection(const std::string& aircraft_title) {
 
                 auto map_it = g_settings.map_definitions.find(selected_map_id);
                 if (map_it != g_settings.map_definitions.end()) {
-                    COMMANDS_FILENAME = map_it->second;
-                    load_command_map(COMMANDS_FILENAME);
+                    set_commands_filename(map_it->second);
+                    load_command_map(map_it->second);
                 }
             } else {
                 std::lock_guard<std::mutex> lock(g_consoleMutex);
@@ -2590,7 +2718,7 @@ int main(int argc, char* argv[]) {
     }
 
     // 2. Load commands (Hex-to-SimConnect)
-    if (!load_command_map(COMMANDS_FILENAME)) {
+    if (!load_command_map(get_commands_filename())) {
         std::cerr << "[WARNING] Commands could not be loaded. Functionality limited." << std::endl;
     }
 
@@ -2740,7 +2868,7 @@ int main(int argc, char* argv[]) {
             if (g_ble.shuttingDown) break;
 
             // Only check connected devices if setup is complete
-            if (!g_discoveryFinished || g_ble.connected.empty()) {
+            if (!g_discoveryFinished) {
                 continue;
             }
 
@@ -2750,6 +2878,9 @@ int main(int argc, char* argv[]) {
                 for (auto& [mac, device] : g_ble.connected) {
                     peripherals_to_check.push_back({mac, device.p});
                 }
+            }
+            if (peripherals_to_check.empty()) {
+                continue;
             }
 
             bool connection_lost = false;
@@ -2819,9 +2950,10 @@ int main(int argc, char* argv[]) {
                             SimConnect_RequestDataOnSimObject(g_hSimConnectNative, REQUEST_AIRCRAFT_TITLE, DEFINITION_AIRCRAFT_TITLE, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE);
                         } else {
                             // Find user friendly name for the current file
-                            std::string map_friendly_name = COMMANDS_FILENAME;
+                            const std::string commandsFile = get_commands_filename();
+                            std::string map_friendly_name = commandsFile;
                             for (const auto& [id, file] : g_settings.map_definitions) {
-                                if (file == COMMANDS_FILENAME) {
+                                if (file == commandsFile) {
                                     auto name_it = g_settings.map_names.find(id);
                                     if (name_it != g_settings.map_names.end()) {
                                         map_friendly_name = name_it->second;
@@ -2830,7 +2962,7 @@ int main(int argc, char* argv[]) {
                                 }
                             }
 
-                            if (load_command_map(COMMANDS_FILENAME)) {
+                            if (load_command_map(commandsFile)) {
                                 std::cout << "[SYSTEM] Command map (" << map_friendly_name << ") reloaded successfully." << std::endl;
                             } else {
                                 std::cout << "[SYSTEM] Error reloading command map (" << map_friendly_name << ")." << std::endl;
