@@ -83,6 +83,33 @@ struct HardwareDevice {
     bool auto_reconnect;     // Should the device automatically be reconnected in this role?
 };
 
+// JSON (de)serialisation for HardwareDevice. Keep save and load in one place so the keys can't drift.
+// The Bluetooth name is stored under "name"; "ble_name" is also accepted when loading.
+static void to_json(json& j, const HardwareDevice& dev) {
+    j = json{
+        {"instrument", dev.instrument},
+        {"type", dev.type},
+        {"position", dev.position},
+        {"name", dev.ble_name},
+        {"address", dev.address},
+        {"last_connected", dev.last_connected},
+        {"auto_reconnect", dev.auto_reconnect}
+    };
+}
+
+static void from_json(const json& j, HardwareDevice& dev) {
+    auto safeString = [&](const char* key, const std::string& fallback) {
+        return (j.contains(key) && j[key].is_string()) ? j[key].get<std::string>() : fallback;
+    };
+    dev.instrument     = safeString("instrument", "UNKNOWN");
+    dev.type           = safeString("type", "UNKNOWN");
+    dev.position       = safeString("position", "none");
+    dev.ble_name       = safeString("name", safeString("ble_name", "Unknown"));
+    dev.address        = safeString("address", "");
+    dev.last_connected = safeString("last_connected", "never");
+    dev.auto_reconnect = j.value("auto_reconnect", false);
+}
+
 // List of known devices
 static std::vector<HardwareDevice> g_knownDevices;
 
@@ -1018,22 +1045,7 @@ bool load_known_devices(const std::string& filename) {
 
         g_knownDevices.clear();
         for (const auto& item : j["devices"]) {
-            HardwareDevice dev;
-
-            // Function for safe reading of strings
-            auto safeString = [&](const std::string& key, const std::string& fallback) {
-                return (item.contains(key) && !item[key].is_null()) ? item[key].get<std::string>() : fallback;
-            };
-
-            dev.instrument     = safeString("instrument", "UNKNOWN");
-            dev.type           = safeString("type", "UNKNOWN");
-            dev.position       = safeString("position", "none");
-            dev.ble_name       = safeString("ble_name", "Unknown");
-            dev.address        = safeString("address", "");
-            dev.last_connected = safeString("last_connected", "never");
-            dev.auto_reconnect = item.value("auto_reconnect", false);
-
-            g_knownDevices.push_back(dev);
+            g_knownDevices.push_back(item.get<HardwareDevice>());
         }
     } catch (json::parse_error& e) {
         std::cerr << "JSON Error: " << e.what() << std::endl;
@@ -1113,15 +1125,7 @@ void save_known_devices() {
     j["devices"] = nlohmann::json::array();
 
     for (const auto& dev : g_knownDevices) {
-        j["devices"].push_back({
-            {"instrument", dev.instrument},
-            {"type", dev.type},
-            {"position", dev.position},
-            {"name", dev.ble_name},
-            {"address", dev.address},
-            {"last_connected", dev.last_connected},
-            {"auto_reconnect", dev.auto_reconnect}
-        });
+        j["devices"].push_back(dev);
     }
 
     std::ofstream file(g_settings.device_map_file);
