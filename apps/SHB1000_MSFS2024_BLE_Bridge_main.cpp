@@ -1715,35 +1715,62 @@ static BOOL WINAPI ConsoleCtrlHandler(DWORD type) {
     }
 }
 
-// Helper function: Blinks the device Blink_count times 
-static void blink_device(SimpleBLE::Peripheral p, 
-                         const SimpleBLE::BluetoothUUID s_uuid, 
-                         const SimpleBLE::BluetoothUUID c_uuid, 
-                         int blink_count, 
-                         bool fire_and_forget) {
-    
-    // The actual blink logic wrapped in a lambda expression
-    auto blink_task = [p, s_uuid, c_uuid, blink_count]() mutable {
+// Flashes a bezel's backlight on a background thread until stop() is called (or the object is destroyed),
+// so the user can see which bezel a setup prompt is about. Afterwards the backlight is set back to restore_level.
+class BacklightIdentifyBlinker {
+public:
+    BacklightIdentifyBlinker(SimpleBLE::Peripheral p, SimpleBLE::BluetoothUUID s_uuid, SimpleBLE::BluetoothUUID light_uuid,
+                             uint8_t restore_level)
+        : p_(p), s_uuid_(s_uuid), light_uuid_(light_uuid), restore_level_(restore_level) {
+        thread_ = std::thread([this]() { run(); });
+    }
+    ~BacklightIdentifyBlinker() { stop(); }
+    BacklightIdentifyBlinker(const BacklightIdentifyBlinker&) = delete;
+    BacklightIdentifyBlinker& operator=(const BacklightIdentifyBlinker&) = delete;
+
+    // Stops flashing, waits for the thread (so nobody else writes to the device meanwhile) and restores the backlight
+    void stop() {
+        stop_ = true;
+        if (thread_.joinable()) thread_.join();
+    }
+
+private:
+    // Sleeps up to ms, returning early (false) once stop() was requested
+    bool wait(int ms) {
+        for (int waited = 0; waited < ms; waited += 50) {
+            if (stop_) return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return !stop_;
+    }
+
+    void write_level(uint8_t level) {
+        SimpleBLE::ByteArray data;
+        data.push_back(level);
+        p_.write_request(s_uuid_, light_uuid_, data);
+    }
+
+    void run() {
         try {
-            for (int i = 0; i < blink_count; ++i) {
-                p.write_request(s_uuid, c_uuid, SimpleBLE::ByteArray(1, 0x00)); // ON
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                p.write_request(s_uuid, c_uuid, SimpleBLE::ByteArray(1, 0x40)); // OFF
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            while (!stop_) {
+                write_level(level_to_brightness_byte(4)); // ON (full)
+                if (!wait(500)) break;
+                write_level(level_to_brightness_byte(0)); // OFF
+                if (!wait(500)) break;
             }
+            write_level(restore_level_); // Back to the configured brightness
         } catch (const std::exception& e) {
             std::cerr << "[BLINK] Error while blinking: " << e.what() << std::endl;
         }
-    };
-
-    // If "Fire & Forget", we offload the logic to a background thread
-    if (fire_and_forget) {
-        std::thread(blink_task).detach();
-    } else {
-        // Otherwise we execute the task synchronously and block the code here
-        blink_task();
     }
-}
+
+    SimpleBLE::Peripheral p_;
+    SimpleBLE::BluetoothUUID s_uuid_;
+    SimpleBLE::BluetoothUUID light_uuid_;
+    uint8_t restore_level_;
+    std::atomic<bool> stop_{false};
+    std::thread thread_;
+};
 
 // Scan, identify and connect to all target devices
 int ble_run_session_scan_until_all_addresses(
@@ -2040,9 +2067,11 @@ int ble_run_session_scan_until_all_addresses(
                     continue;
                 }
 
-                // --- IDENTIFICATION: 3x BLINK (Background) ---
-                std::cout << "   -> Bezel is blinking to identify..." << std::endl;
-                blink_device(p, service_uuid, char_uuid, 3, true);
+                // --- IDENTIFICATION: flash the backlight until the role is chosen (Background) ---
+                std::cout << "   -> The BACKLIGHT of this bezel is now flashing (not the small Bluetooth LED)." << std::endl;
+                BacklightIdentifyBlinker blinker(p, service_uuid,
+                                                 SimpleBLE::BluetoothUUID(g_settings.lightBrightnessCharacteristicUUID),
+                                                 g_settings.defaultBrightness);
 
                 // --- Dynamic Role Assignment ---
                 // 1. Determine standard role (proposal)
@@ -2077,6 +2106,7 @@ int ble_run_session_scan_until_all_addresses(
 
                 std::string input;
                 std::getline(std::cin, input);
+                blinker.stop(); // Answered: stop flashing before we continue talking to the device
 
                 // 3. Process input
                 char choice;
