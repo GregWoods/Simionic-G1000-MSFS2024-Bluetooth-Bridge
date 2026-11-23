@@ -1080,9 +1080,16 @@ bool load_command_map(const std::string& filename) {
                 [](unsigned char c){ return std::toupper(c); });
 
             // 2. Remove quotes, if present
+            bool quoted = false;
             if (command.size() >= 2 && command.front() == '"' && command.back() == '"') {
                 command = command.substr(1, command.size() - 2);
                 trim(command); // In case there were still spaces inside the quotes
+                quoted = true;
+            }
+
+            // An unquoted "unassigned" placeholder means "no mapping" - don't send it to the sim
+            if (!quoted && to_lower(command) == "unassigned") {
+                continue;
             }
             
             // 3. Save into the map
