@@ -14,6 +14,8 @@
 #include <vector>
 #include <memory>
 #include <mutex>
+#include <condition_variable>
+#include <deque>
 #include <thread>
 #include <chrono>
 #include <atomic>
@@ -55,6 +57,9 @@ static const std::string APP_VERSION = "1.08.1";
 // --- ORBIT LOGIC ---
 static std::atomic<bool> g_orbit_active{false};
 static std::atomic<bool> g_orbit_evaluation_pending{false};
+// Orbit center: the aircraft position at the moment the orbit was engaged (only used on the SimConnect thread)
+static double g_orbit_center_lat = 0.0;
+static double g_orbit_center_lon = 0.0;
 static auto g_last_orbit_time = std::chrono::steady_clock::now();
 // -------------------
 
@@ -255,8 +260,10 @@ struct AircraftData {
 struct OrbitData {
     int32_t autopilot_master;
     int32_t autopilot_hdg_lock;
-    double gps_wp_distance;
-    double gps_wp_bearing;
+    double plane_latitude;     // Degrees
+    double plane_longitude;    // Degrees
+    double heading_true;       // Degrees
+    double heading_magnetic;   // Degrees
     int32_t sim_on_ground;
     double flaps_left_percent;
     double radio_altitude;
@@ -268,7 +275,27 @@ struct OrbitData {
 
 // Global storage for the latest fetched orbit data
 static std::mutex g_orbitDataMutex;
-static OrbitData g_latestOrbitData = {0, 0, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0};
+static OrbitData g_latestOrbitData = {};
+
+// Great-circle distance (NM) and initial true bearing (degrees, 0-360) from point 1 to point 2
+static void distance_and_bearing(double lat1_deg, double lon1_deg, double lat2_deg, double lon2_deg,
+                                 double& out_distance_nm, double& out_bearing_true_deg) {
+    constexpr double PI = 3.14159265358979323846;
+    constexpr double DEG2RAD = PI / 180.0;
+    constexpr double EARTH_RADIUS_NM = 3440.065;
+
+    double lat1 = lat1_deg * DEG2RAD, lat2 = lat2_deg * DEG2RAD;
+    double dlat = lat2 - lat1;
+    double dlon = (lon2_deg - lon1_deg) * DEG2RAD;
+
+    double a = std::sin(dlat / 2) * std::sin(dlat / 2) +
+               std::cos(lat1) * std::cos(lat2) * std::sin(dlon / 2) * std::sin(dlon / 2);
+    out_distance_nm = 2.0 * EARTH_RADIUS_NM * std::atan2(std::sqrt(a), std::sqrt(1.0 - a));
+
+    double y = std::sin(dlon) * std::cos(lat2);
+    double x = std::cos(lat1) * std::sin(lat2) - std::sin(lat1) * std::cos(lat2) * std::cos(dlon);
+    out_bearing_true_deg = std::fmod(std::atan2(y, x) / DEG2RAD + 360.0, 360.0);
+}
 static std::atomic<bool> g_orbitDataReady{false};
 
 // --- SIM RATE CONTROLLER LOGIC ---
@@ -654,18 +681,29 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
             } else if (pObjData->dwRequestID == REQUEST_ORBIT_DATA) {
                 OrbitData* pOrbitData = (OrbitData*)&pObjData->dwData;
                 {
+                    // Only hold the mutex while copying, so the SimRate telemetry thread is never blocked by the logic below
                     std::lock_guard<std::mutex> lock(g_orbitDataMutex);
                     g_latestOrbitData = *pOrbitData;
                     g_orbitDataReady = true;
-
+                }
+                {
                     // Output debug logs as requested
                     auto t = std::time(nullptr);
-                    auto tm = *std::localtime(&t);
+                    std::tm tm{};
+                    localtime_s(&tm, &t);
                     std::ostringstream oss;
                     oss << std::put_time(&tm, "%H:%M:%S");
                     std::string timestamp = oss.str();
 
-                    bool dist_above_orbit = (pOrbitData->gps_wp_distance > g_settings.orbitRadius);
+                    // Distance and bearing from the aircraft to the orbit center (the point where the orbit was engaged)
+                    double orbit_distance_nm = 0.0;
+                    double orbit_bearing_true = 0.0;
+                    if (g_orbit_active) {
+                        distance_and_bearing(pOrbitData->plane_latitude, pOrbitData->plane_longitude,
+                                             g_orbit_center_lat, g_orbit_center_lon,
+                                             orbit_distance_nm, orbit_bearing_true);
+                    }
+                    bool dist_above_orbit = (orbit_distance_nm > g_settings.orbitRadius);
 
                     // --- GGGD Alarm Logic ---
                     if (g_settings.refuel_reminder) {
@@ -679,7 +717,7 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
                         // Rule B: In-Air Approach Trigger (Primary Alarm)
                         if (pOrbitData->flaps_left_percent > 95.0 && pOrbitData->sim_on_ground == 0) {
                             if (!g_air_alarm_triggered) {
-                                std::thread(play_gggd_sequence).detach();
+                                play_gggd_sequence();
                                 g_air_alarm_triggered = true;
                             }
                         }
@@ -687,7 +725,7 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
                         // Rule C: On-Ground Failsafe Trigger (Secondary Alarm)
                         if (pOrbitData->sim_on_ground == 1 && std::abs(pOrbitData->velocity_body_z) < 0.1 && pOrbitData->flaps_left_percent < 5.0) {
                             if (!g_ground_alarm_triggered && g_air_alarm_triggered) {
-                                std::thread(play_gggd_sequence).detach();
+                                play_gggd_sequence();
                                 g_ground_alarm_triggered = true;
                             }
                         }
@@ -697,8 +735,8 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
                     if (g_print_commands_to_console) {
                         std::cout << "[" << timestamp << "] [ORBIT] AP_MASTER=" << pOrbitData->autopilot_master 
                                   << " | AP_HDG=" << pOrbitData->autopilot_hdg_lock
-                                  << " | DIST=" << pOrbitData->gps_wp_distance 
-                                  << " | BRG=" << pOrbitData->gps_wp_bearing 
+                                  << " | DIST=" << orbit_distance_nm 
+                                  << " | BRG(T)=" << orbit_bearing_true 
                                   << " | >" << g_settings.orbitRadius << "NM=" << (dist_above_orbit ? "true" : "false") << std::endl;
                     }
 
@@ -711,6 +749,9 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
                             play_toggle_beep(false, 1, true);
                             std::cout << "\n[SYSTEM] Cannot engage Orbit Function: Autopilot HDG mode is disabled." << std::endl;
                         } else {
+                            // Orbit around the current position
+                            g_orbit_center_lat = pOrbitData->plane_latitude;
+                            g_orbit_center_lon = pOrbitData->plane_longitude;
                             g_orbit_active = true;
                             play_toggle_beep(g_orbit_active);
                             std::cout << "\n[SYSTEM] Orbit Function successfully engaged! (ON)" << std::endl;
@@ -726,7 +767,12 @@ void CALLBACK MyNativeDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* p
                             std::cout << "\n[SYSTEM] AFK Orbit Function disengaged: Autopilot HDG mode was disabled." << std::endl;
                         } else {
                             double correction = dist_above_orbit ? g_settings.orbitHeadingCorrectionFar : g_settings.orbitHeadingCorrectionNear;
-                            double target_heading = pOrbitData->gps_wp_bearing + correction;
+                            // The heading bug is magnetic: convert the true bearing using the current magnetic variation
+                            double magnetic_variation = pOrbitData->heading_true - pOrbitData->heading_magnetic;
+                            if (magnetic_variation > 180.0) magnetic_variation -= 360.0;   // e.g. true 2 / mag 358
+                            if (magnetic_variation < -180.0) magnetic_variation += 360.0;
+                            double bearing_magnetic = orbit_bearing_true - magnetic_variation;
+                            double target_heading = bearing_magnetic + correction;
                             target_heading = std::fmod((target_heading + 360.0), 360.0);
                             if (target_heading < 0.0) target_heading += 360.0;
                             
@@ -791,21 +837,59 @@ std::atomic<uint8_t> pending_first_key(0x00);
 std::chrono::steady_clock::time_point first_key_time;
 std::atomic<bool> combo_active_block(false);
 
-// Beep routine extracted to allow passing the toggle state
+// Beep() is synchronous and can take seconds, so all sounds are played one after another on a single
+// audio worker thread. Callers (SimConnect callback, BLE callbacks, console) only queue them and never block.
+static void enqueue_sound(std::function<void()> sound) {
+    static std::mutex queue_mutex;
+    static std::condition_variable queue_cv;
+    static std::deque<std::function<void()>> queue;
+    static std::once_flag worker_started;
+
+    std::call_once(worker_started, []() {
+        std::thread([]() {
+            while (true) {
+                std::function<void()> next;
+                {
+                    std::unique_lock<std::mutex> lock(queue_mutex);
+                    queue_cv.wait(lock, []() { return !queue.empty(); });
+                    next = std::move(queue.front());
+                    queue.pop_front();
+                }
+                next(); // Play without holding the lock
+            }
+        }).detach();
+    });
+
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex);
+        queue.push_back(std::move(sound));
+    }
+    queue_cv.notify_one();
+}
+
+// Beep routine extracted to allow passing the toggle state (queued, returns immediately)
 static void play_toggle_beep(bool is_swapped, int count, bool is_long) {
     int duration = is_long ? 900 : 150;
     int frequency = is_swapped ? 800 : 1600;
 
-    for (int i = 0; i < count; ++i) {
-        Beep(frequency, duration);
-        if (i < count - 1) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    enqueue_sound([frequency, duration, count]() {
+        for (int i = 0; i < count; ++i) {
+            Beep(frequency, duration);
+            if (i < count - 1) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
         }
-    }
+    });
 }
 
-// GGGD Alarm Audio Sequence
+static void play_gggd_sequence_blocking();
+
+// GGGD Alarm Audio Sequence (queued, returns immediately)
 static void play_gggd_sequence() {
+    enqueue_sound(play_gggd_sequence_blocking);
+}
+
+static void play_gggd_sequence_blocking() {
     auto play_morse_G = [](int freq) {
         Beep(freq, 350); // Dash
         std::this_thread::sleep_for(std::chrono::milliseconds(60));
@@ -2539,8 +2623,10 @@ int main(int argc, char* argv[]) {
                     SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_AIRCRAFT_TITLE, "TITLE", NULL, SIMCONNECT_DATATYPE_STRING256);
                     SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_ORBIT_DATA, "AUTOPILOT MASTER", "Bool", SIMCONNECT_DATATYPE_INT32);
                     SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_ORBIT_DATA, "AUTOPILOT HEADING LOCK", "Bool", SIMCONNECT_DATATYPE_INT32);
-                    SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_ORBIT_DATA, "GPS WP DISTANCE", "Nautical miles", SIMCONNECT_DATATYPE_FLOAT64);
-                    SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_ORBIT_DATA, "GPS WP BEARING", "Degrees", SIMCONNECT_DATATYPE_FLOAT64);
+                    SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_ORBIT_DATA, "PLANE LATITUDE", "Degrees", SIMCONNECT_DATATYPE_FLOAT64);
+                    SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_ORBIT_DATA, "PLANE LONGITUDE", "Degrees", SIMCONNECT_DATATYPE_FLOAT64);
+                    SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_ORBIT_DATA, "PLANE HEADING DEGREES TRUE", "Degrees", SIMCONNECT_DATATYPE_FLOAT64);
+                    SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_ORBIT_DATA, "PLANE HEADING DEGREES MAGNETIC", "Degrees", SIMCONNECT_DATATYPE_FLOAT64);
                     SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_ORBIT_DATA, "SIM ON GROUND", "Bool", SIMCONNECT_DATATYPE_INT32);
                     SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_ORBIT_DATA, "TRAILING EDGE FLAPS LEFT PERCENT", "Percent", SIMCONNECT_DATATYPE_FLOAT64);
                     SimConnect_AddToDataDefinition(g_hSimConnectNative, DEFINITION_ORBIT_DATA, "PLANE ALT ABOVE GROUND", "Feet", SIMCONNECT_DATATYPE_FLOAT64);
