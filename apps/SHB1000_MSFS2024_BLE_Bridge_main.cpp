@@ -98,6 +98,12 @@ struct AircraftHistoryEntry {
     std::string last_used;
 };
 
+// Converts a backlight level 0 (off) ... 4 (full) into the byte the bezel expects (0x40 = off ... 0x00 = full)
+static uint8_t level_to_brightness_byte(int level) {
+    level = std::clamp(level, 0, 4);
+    return static_cast<uint8_t>((4 - level) * 0x10);
+}
+
 struct GlobalSettings {
     std::string device_map_file;        // Specifies the file of the last know devices (with their roles etc.)
     std::string default_map_id = "std_g1000";
@@ -107,7 +113,7 @@ struct GlobalSettings {
     int scan_timeout_sec;               // Timeout for Bluetooth scanning in seconds - not used
     std::string characteristicUUID;                 // Bluetooth data characteristic UUID for button data
     std::string lightBrightnessCharacteristicUUID;  // Bluetooth data characteristic UUID for backlight control
-    uint8_t defaultBrightness = 0x00;   // Default backlight intensity: Fully on (level 4) - update from config
+    uint8_t defaultBrightness = 0x00;   // Default backlight byte (0x00 = level 4, fully on) - converted from the 0-4 level in the config
     // For rotary encoder acceleration:
     int fastTurnSensitivity1 = 250; // Threshold for brisk turning (ms)
     int fastTurnSensitivity2 = 130; // Threshold for fast turning (ms)
@@ -973,7 +979,7 @@ bool load_master_config(const std::string& filename) {
             auto& shb = j["devices"]["SHB1000"];
             g_settings.characteristicUUID = shb.value("characteristicUUID", "");
             g_settings.lightBrightnessCharacteristicUUID = shb.value("lightBrightnessCharacteristicUUID", "");
-            g_settings.defaultBrightness = shb.value("defaultBrightness", 4);
+            g_settings.defaultBrightness = level_to_brightness_byte(shb.value("defaultBrightness", 4));
             
             // Load values for brisk / fast turning (if present in config, otherwise fallback)
             g_settings.fastTurnSensitivity1 = shb.value("fastTurnSensitivity1", g_settings.fastTurnSensitivity1);
@@ -2627,14 +2633,15 @@ int main(int argc, char* argv[]) {
                 m_was_pressed = m_is_down;
 
                 // 3. BRIGHTNESS (0-4)
-                uint8_t targetVal = 0xFF; 
-                if ((GetAsyncKeyState(VK_OEM_5) & 0x8000) || (GetAsyncKeyState('0') & 0x8000)) targetVal = 0x40;
-                else if (GetAsyncKeyState('1') & 0x8000) targetVal = 0x30;
-                else if (GetAsyncKeyState('2') & 0x8000) targetVal = 0x20;
-                else if (GetAsyncKeyState('3') & 0x8000) targetVal = 0x10;
-                else if (GetAsyncKeyState('4') & 0x8000) targetVal = 0x00;
+                int targetLevel = -1;
+                if ((GetAsyncKeyState(VK_OEM_5) & 0x8000) || (GetAsyncKeyState('0') & 0x8000)) targetLevel = 0;
+                else if (GetAsyncKeyState('1') & 0x8000) targetLevel = 1;
+                else if (GetAsyncKeyState('2') & 0x8000) targetLevel = 2;
+                else if (GetAsyncKeyState('3') & 0x8000) targetLevel = 3;
+                else if (GetAsyncKeyState('4') & 0x8000) targetLevel = 4;
 
-                if (targetVal != 0xFF) {
+                if (targetLevel >= 0) {
+                    uint8_t targetVal = level_to_brightness_byte(targetLevel);
                     send_brightness_to_all(targetVal);
                     {
                         std::lock_guard<std::mutex> lock(g_consoleMutex);
