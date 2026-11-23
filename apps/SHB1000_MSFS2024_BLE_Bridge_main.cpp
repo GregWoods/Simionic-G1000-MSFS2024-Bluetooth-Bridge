@@ -1523,7 +1523,10 @@ int ble_run_session_scan_until_all_addresses(
 
 
     // 1. Container for found, relevant devices
+    // Filled by the scan callback (BLE thread) while this thread checks progress, so it is guarded by a mutex
+    std::mutex found_mutex;
     std::vector<SimpleBLE::Peripheral> found_candidates;
+    size_t found_target_count = 0; // How many of target_macs have been found
 
     // Extract unique device types from known devices for dynamic matching
     std::vector<std::string> valid_types;
@@ -1553,6 +1556,7 @@ int ble_run_session_scan_until_all_addresses(
                       << " | MAC: " << raw_addr << std::endl;
         }
 
+        std::lock_guard<std::mutex> found_lock(found_mutex);
         if (target_macs.count(clean_addr)) {
             // Check if we already have the MAC in the array to avoid duplicates
             auto it = std::find_if(found_candidates.begin(), found_candidates.end(),
@@ -1564,11 +1568,13 @@ int ble_run_session_scan_until_all_addresses(
 
             if (it == found_candidates.end()) {
                 found_candidates.push_back(p);
+                found_target_count++;
                 std::cout << "  >>> MATCH! Device found in list and added." << std::endl;
             }
         } 
-        // Always admit devices showing matching identifiers, even if unknown to config yet
-        else {
+        // On startup, also admit devices showing matching identifiers, even if unknown to config yet.
+        // Not on reconnect: there we only look for the lost devices, and unknown devices would have no role anyway.
+        else if (!is_reconnect) {
             bool matched_type = false;
             for (const auto& vt : valid_types) {
                 if (p.identifier().find(vt) == 0) {
@@ -1598,25 +1604,35 @@ int ble_run_session_scan_until_all_addresses(
     int attempts = 0;
     int max_attempts = is_reconnect ? 10 : 2; // 10 attempts on reconnect, 2 on startup
 
-    // If we have no known devices, we want to force scanning to find unseen/new devices
-    size_t required_targets = target_macs.size();
-    if (required_targets == 0 && !is_reconnect) {
-        required_targets = 1; // Force at least one scan iteration to find any new device
-    }
+    // Scanning is done when all target MACs are found. Unknown devices don't count towards that,
+    // so a nearby second bezel can't end the scan before the wanted device is seen.
+    // If we have no known devices at all (first run), stop as soon as any matching new device is found.
+    auto scan_complete = [&]() {
+        std::lock_guard<std::mutex> found_lock(found_mutex);
+        if (!target_macs.empty()) return found_target_count >= target_macs.size();
+        return !found_candidates.empty();
+    };
 
     std::cout << "\n[INFO] Start scan for " << target_macs.size() << " known devices..." << std::endl;
     std::cout << "----------------------------------------------------" << std::endl;
 
-    while (found_candidates.size() < required_targets && attempts < max_attempts) {
+    while (!scan_complete() && attempts < max_attempts) {
         attempts++;
         if (attempts > 1) std::cout << "[RETRY] Starting attempt " << attempts << "..." << std::endl;
         // Only the actual scan process is repeated
         adapter.scan_for(scan_duration_ms); 
         
         // Short pause between attempts so the hardware can "breathe"
-        if (found_candidates.size() < required_targets && attempts < max_attempts) {
+        if (!scan_complete() && attempts < max_attempts) {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
+    }
+
+    // Scanning is over: drop the callback (it references locals of this function) and take the results
+    adapter.set_callback_on_scan_found({});
+    {
+        std::lock_guard<std::mutex> found_lock(found_mutex);
+        // Barrier: a callback still running has finished; found_candidates is only used by this thread from here on
     }
 
     // If there are still no candidates, back out completely and repeat with the long scan
