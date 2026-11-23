@@ -14,8 +14,8 @@ Bridges Simionic G1000 hardware bezels to Microsoft Flight Simulator via Bluetoo
 
 ```
 # Clone with submodules
-git clone --recurse-submodules https://github.com/YOUR_USERNAME/MSFS_BluetoothLE_Bridge_Cpp.git
-cd MSFS_BluetoothLE_Bridge_Cpp
+git clone --recurse-submodules https://github.com/GregWoods/Simionic-G1000-MSFS2024-Bluetooth-Bridge.git
+cd Simionic-G1000-MSFS2024-Bluetooth-Bridge
 
 # If you already cloned without submodules:
 git submodule update --init --recursive
